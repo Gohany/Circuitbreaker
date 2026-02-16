@@ -1,0 +1,21 @@
+{
+  "name": "gohany/retry",
+  "description": "Common interface for retrying operations",
+  "keywords": ["retry", "Retry"],
+  "homepage": "https://github.com/Gohany/Retry",
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "Greg Riley",
+      "homepage": "https://github.com/Gohany"
+    }
+  ],
+  "require": {
+    "php": ">=7.1"
+  },
+  "autoload": {
+    "psr-4": {
+      "Gohany\\Retry\\": "src"
+    }
+  }
+}

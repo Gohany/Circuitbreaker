@@ -1,0 +1,29 @@
+{
+  "name": "gohany/circuitbreaker",
+  "description": "Circuit breaker primitives for Symfony and CodeIgniter (PHP 7.4) with Redis stores and probe gating.",
+  "type": "library",
+  "license": "proprietary",
+  "require": {
+    "php": ">=7.4",
+    "psr/clock": "^1.0",
+    "psr/http-client": "^1.0",
+    "psr/http-message": "^1.0 || ^2.0",
+    "gohany/rtry": "^1.0",
+    "ext-json": "*"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^9.6"
+  },
+  "autoload": {
+    "psr-4": {
+      "Gohany\\Circuitbreaker\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "tests\\": "tests/"
+    }
+  },
+  "minimum-stability": "stable",
+  "prefer-stable": true
+}

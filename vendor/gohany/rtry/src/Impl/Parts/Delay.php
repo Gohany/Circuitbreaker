@@ -1,0 +1,42 @@
+<?php declare(strict_types=1);
+
+namespace Gohany\Rtry\Impl\Parts;
+
+use Gohany\Rtry\Contracts\PartInterface;
+use Gohany\Rtry\Contracts\RtryPolicyInterface;
+use Gohany\Rtry\Impl\Duration;
+
+final class Delay extends Part implements PartInterface
+{
+    public const KEY = 'd';
+    private int $delayMs;
+
+    public function __construct(int $delayMs) {
+        $this->delayMs = $delayMs;
+    }
+
+    public function delayMs(): int
+    {
+        return $this->delayMs;
+    }
+
+    public function key(): string
+    {
+        return Delay::KEY;
+    }
+
+    public function __toString(): string
+    {
+        return Delay::KEY . '=' . Duration::formatMs($this->delayMs);
+    }
+
+    public function applyToPolicy(RtryPolicyInterface $policy): RtryPolicyInterface
+    {
+        return $policy->setDelayMs($this->delayMs);
+    }
+
+    public static function make(string $value): PartInterface
+    {
+        return new Delay(Duration::parseDurationMs(Delay::trimKey($value)));
+    }
+}
