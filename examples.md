@@ -1,19 +1,38 @@
 # Examples
 
-This file provides concrete examples of how to use the `gohany/circuitbreaker` library with common patterns and the included defaults.
+Concrete usage patterns for `gohany/circuitbreaker`.
 
-## Basic Generic Usage
+## Table of contents
 
-You can protect any operation by wrapping it in the `execute` method.
+- [Core: protect any operation](#core-protect-any-operation)
+- [HTTP: single-circuit PSR-18 decorator](#http-single-circuit-psr-18-decorator)
+  - [Custom key/context building](#custom-keycontext-building)
+  - [Built-in: path section scoping](#built-in-path-section-scoping)
+- [HTTP key composition: `CircuitBreakerKeyFactory` + pieces](#http-key-composition-circuitbreakerkeyfactory--pieces)
+- [HTTP: multiple circuits per request](#http-multiple-circuits-per-request)
+- [Pattern: dual-key reliability + tenant fraud lockout](#pattern-dual-key-reliability--tenant-fraud-lockout)
+- [Explicit request-level configuration](#explicit-request-level-configuration)
+- [Retries](#retries)
+  - [Using `SaneRetryPolicies`](#using-saneretrypolicies)
+  - [Custom policy with retry spec](#custom-policy-with-retry-spec)
+- [Storage backends](#storage-backends)
+  - [Redis wiring example](#redis-wiring-example)
+  - [PDO (SQL) storage example](#pdo-sql-storage-example)
+  - [APCu (shared memory) storage example](#apcu-shared-memory-storage-example)
+
+---
+
+## Core: protect any operation
+
+You can protect any operation by wrapping it in `CircuitBreaker::execute(...)`.
 
 ```php
 use Gohany\Circuitbreaker\Core\CircuitBreaker;
-use Gohany\Circuitbreaker\Core\CircuitKey;
 use Gohany\Circuitbreaker\Core\CircuitContext;
+use Gohany\Circuitbreaker\Core\CircuitKey;
+use Gohany\Circuitbreaker\Exception\CircuitDeniedException;
 
 /** @var CircuitBreaker $breaker */
-
-use Gohany\Circuitbreaker\Exception\CircuitDeniedException;
 
 try {
     $result = $breaker->execute(
@@ -28,13 +47,15 @@ try {
 }
 ```
 
-## PSR-18 HTTP Client Decorator
+---
 
-The library includes a `CircuitBreakingPsr18Client` to easily add circuit breaking to any PSR-18 compliant HTTP client.
+## HTTP: single-circuit PSR-18 decorator
+
+Use `CircuitBreakingPsr18Client` to add circuit breaking to any PSR-18 client.
 
 ```php
-use Gohany\Circuitbreaker\Defaults\Http\CircuitBreakingPsr18Client;
 use Gohany\Circuitbreaker\Core\CircuitBreaker;
+use Gohany\Circuitbreaker\Defaults\Http\CircuitBreakingPsr18Client;
 use Gohany\Circuitbreaker\Policy\Http\DefaultHttpCircuitPolicy;
 
 /** @var Psr\Http\Client\ClientInterface $psr18Client */
@@ -46,53 +67,193 @@ $breaker = new CircuitBreaker(
     $stateStore,
     $historyStore,
     $policy,
-    new \Gohany\Circuitbreaker\Policy\Http\DefaultHttpOutcomeClassifier(), // You should implement this or use a default
-    [],
-    new \Gohany\Circuitbreaker\SideEffect\NullSideEffectDispatcher(),
-    new \Gohany\Circuitbreaker\Util\NativeClock(),
-    new \Gohany\Circuitbreaker\Store\InMemoryProbeGate()
+    new MyOutcomeClassifier() // implement OutcomeClassifierInterface for your stack
 );
 
 $client = new CircuitBreakingPsr18Client($psr18Client, $breaker, 'my-service');
-
-// All requests now go through the circuit breaker
-// The default builder picks up 'X-Tenant-Id' header as tenantId.
 $response = $client->sendRequest($request);
+```
 
-// --- OR with custom key/context building ---
+### Custom key/context building
 
+Pass a custom `HttpCircuitBuilderInterface` to change how keys/contexts are built.
+
+```php
 use Gohany\Circuitbreaker\Defaults\Http\DefaultHttpCircuitBuilder;
-use Psr\Http\Message\RequestInterface;
+use Gohany\Circuitbreaker\Defaults\Http\CircuitBreakingPsr18Client;
 use Gohany\Circuitbreaker\Core\CircuitKey;
+use Psr\Http\Message\RequestInterface;
 
-class MyCustomBuilder extends DefaultHttpCircuitBuilder
+final class MyCustomBuilder extends DefaultHttpCircuitBuilder
 {
     public function buildKey(RequestInterface $request, string $prefix): CircuitKey
     {
-        // Example: use path in the key for more granularity
+        // Example: include full path (high-cardinality; use carefully)
         return new CircuitKey($prefix . ':' . $request->getUri()->getHost() . ':' . $request->getUri()->getPath());
     }
 }
 
+$client = new CircuitBreakingPsr18Client($psr18Client, $breaker, 'my-service', new MyCustomBuilder());
+```
+
+### Built-in: path section scoping
+
+`PathSectionHttpCircuitBuilder` scopes a host into multiple circuits by the first N path segments.
+
+```php
+use Gohany\Circuitbreaker\Defaults\Http\CircuitBreakingPsr18Client;
+use Gohany\Circuitbreaker\Defaults\Http\PathSectionHttpCircuitBuilder;
+
+// Example: /v1/charges/123 -> dimensions[path_section] = "v1/charges"
 $client = new CircuitBreakingPsr18Client(
-    $psr18Client, 
-    $breaker, 
-    'my-service', 
-    new MyCustomBuilder()
+    $psr18Client,
+    $breaker,
+    'my-service',
+    new PathSectionHttpCircuitBuilder(2)
 );
 ```
 
-## Explicit Request-level Configuration
+---
 
-You can implement `CircuitBreakerRequestInterface` on your PSR-7 request objects (or use a decorator) to explicitly define the circuit key and context for a specific request.
+## HTTP key composition: `CircuitBreakerKeyFactory` + pieces
+
+If you want deterministic, order-independent key construction, build keys from key pieces.
 
 ```php
-use Gohany\Circuitbreaker\Defaults\Http\CircuitBreakerRequestInterface;
-use Gohany\Circuitbreaker\Core\CircuitKey;
-use Gohany\Circuitbreaker\Core\CircuitContext;
-use Psr\Http\Message\RequestInterface;
+use Gohany\Circuitbreaker\Defaults\Http\CircuitBreakerKeyFactory;
+use Gohany\Circuitbreaker\Defaults\Http\Pieces\HeaderDimensionKeyPiece;
+use Gohany\Circuitbreaker\Defaults\Http\Pieces\HostKeyPiece;
+use Gohany\Circuitbreaker\Defaults\Http\Pieces\PathSectionDimensionKeyPiece;
+use Gohany\Circuitbreaker\Defaults\Http\Pieces\ValueDimensionKeyPiece;
 
-class MyCustomRequest implements CircuitBreakerRequestInterface
+$factory = new CircuitBreakerKeyFactory('my-service', [
+    // Order does not matter; the factory sorts pieces by `id()`.
+    new PathSectionDimensionKeyPiece(2, 'path_section'),
+    new HostKeyPiece(),
+    new HeaderDimensionKeyPiece('http.tenant', 'X-Tenant-Id', 'tenant'),
+    new HeaderDimensionKeyPiece('http.provider', 'X-Provider-Id', 'provider'),
+    // Add constant, app-provided dimensions too (not derived from the request).
+    new ValueDimensionKeyPiece('env', 'prod'),
+]);
+
+$key = $factory->build($request);
+```
+
+---
+
+## HTTP: multiple circuits per request
+
+If you want a single PSR-18 client to coordinate an **ordered list of circuits** per request (for example, provider/host reliability + tenant fraud lockout), use `MultiCircuitBreakingPsr18Client`.
+
+Semantics:
+- Pre-checks each circuit via `decide(...)` (in order)
+- Sends the request through the inner PSR-18 client (no circuit wraps the call)
+- Classifies + `recordOutcome(...)` for each circuit (in order)
+
+```php
+use Gohany\Circuitbreaker\Defaults\Http\DefaultMultiHttpCircuitsBuilder;
+use Gohany\Circuitbreaker\Defaults\Http\HttpCircuitDefinition;
+use Gohany\Circuitbreaker\Defaults\Http\MultiCircuitBreakingPsr18Client;
+
+$client = new MultiCircuitBreakingPsr18Client(
+    $psr18Client,
+    [
+        // 1) Host/provider reliability circuit
+        new HttpCircuitDefinition($reliabilityBreaker, $reliabilityOutcomeClassifier, 'payments_http', false),
+        // 2) Tenant fraud circuit (disabled when `X-Tenant-Id` is missing)
+        new HttpCircuitDefinition($fraudBreaker, $fraudOutcomeClassifier, 'payments_fraud', true),
+    ],
+    new DefaultMultiHttpCircuitsBuilder()
+);
+
+$response = $client->sendRequest($request);
+```
+
+---
+
+## Pattern: dual-key reliability + tenant fraud lockout
+
+Sometimes you want **network reliability** to be tracked per provider/host, but **fraud lockout** to be tracked per tenant.
+That means you intentionally use **two different `CircuitKey`s**.
+
+- Reliability key: `payments_http:{provider}`
+- Fraud key: `payments_fraud:{tenant}`
+
+You can update the tenant-scoped fraud circuit without running a second dummy `execute()` by calling `CircuitBreakerInterface::recordOutcome(...)`.
+
+```php
+use Gohany\Circuitbreaker\Core\CircuitBreaker;
+use Gohany\Circuitbreaker\Core\CircuitContext;
+use Gohany\Circuitbreaker\Core\CircuitKey;
+use Gohany\Circuitbreaker\Policy\CircuitOutcome;
+use Gohany\Circuitbreaker\Policy\Fraud\FraudLockoutConfig;
+use Gohany\Circuitbreaker\Policy\Fraud\FraudLockoutPolicyDecorator;
+use Gohany\Circuitbreaker\Policy\Http\DefaultHttpCircuitPolicy;
+
+// Reliability breaker (provider/host-scoped)
+$reliabilityBreaker = new CircuitBreaker(
+    $stateStore,
+    $historyStore,
+    new DefaultHttpCircuitPolicy(),
+    $classifier,
+    [],
+    $sideEffects,
+    $clock,
+    $probeGate
+);
+
+// Fraud breaker (tenant-scoped)
+$fraudBreaker = new CircuitBreaker(
+    $stateStore,
+    $historyStore,
+    new FraudLockoutPolicyDecorator(
+        new DefaultHttpCircuitPolicy(),
+        new FraudLockoutConfig([
+            'lockoutMs' => 15 * 60 * 1000,
+            'fraudSignals' => ['fraud_suspected'],
+        ])
+    ),
+    $classifier,
+    [],
+    $sideEffects,
+    $clock,
+    $probeGate
+);
+
+$ctx = new CircuitContext($tenantId);
+
+// 1) Optional: pre-check tenant fraud lockout
+$fraudBreaker->decide(new CircuitKey('payments_fraud', ['tenant' => $tenantId]), $ctx);
+
+// 2) Run the network call under provider reliability circuit
+$response = $reliabilityBreaker->execute(
+    new CircuitKey('payments_http', ['provider' => $provider]),
+    $ctx,
+    fn () => $psr18Client->sendRequest($request)
+);
+
+// 3) If you detect fraud, record it against the tenant circuit
+if ($response->hasHeader('X-Fraud-Suspected')) {
+    $fraudBreaker->recordOutcome(
+        new CircuitKey('payments_fraud', ['tenant' => $tenantId]),
+        $ctx,
+        new CircuitOutcome(true, ['fraud_suspected'], null, [], 0)
+    );
+}
+```
+
+---
+
+## Explicit request-level configuration
+
+For single-circuit HTTP usage, you can implement `CircuitBreakerRequestInterface` on your PSR-7 request objects to explicitly define the circuit key/context.
+
+```php
+use Gohany\Circuitbreaker\Core\CircuitContext;
+use Gohany\Circuitbreaker\Core\CircuitKey;
+use Gohany\Circuitbreaker\Defaults\Http\CircuitBreakerRequestInterface;
+
+final class MyCustomRequest implements CircuitBreakerRequestInterface
 {
     // ... implement PSR-7 methods ...
 
@@ -106,24 +267,20 @@ class MyCustomRequest implements CircuitBreakerRequestInterface
         return new CircuitContext('tenant-override');
     }
 }
-
-// When passed to CircuitBreakingPsr18Client, these values take precedence over the builder.
-$response = $client->sendRequest(new MyCustomRequest());
 ```
 
-## Using Sane Retry Policies
+---
 
-The `SaneRetryPolicies` class provides pre-configured `rtry` policies for common scenarios.
+## Retries
+
+### Using `SaneRetryPolicies`
 
 ```php
+use Gohany\Circuitbreaker\Core\CircuitBreaker;
 use Gohany\Circuitbreaker\Defaults\Rtry\SaneRetryPolicies;
 use Gohany\Circuitbreaker\Integration\Rtry\RtryRetryExecutor;
-use Gohany\Circuitbreaker\Core\CircuitBreaker;
 
 $retryExecutor = new RtryRetryExecutor($classifier);
-
-// For idempotent GET requests
-$idempotentPolicy = SaneRetryPolicies::defaultHttp();
 
 $breaker = new CircuitBreaker(
     $stateStore,
@@ -135,55 +292,41 @@ $breaker = new CircuitBreaker(
     new \Gohany\Circuitbreaker\Util\NativeClock(),
     new \Gohany\Circuitbreaker\Store\InMemoryProbeGate(),
     $retryExecutor,
-    $idempotentPolicy
-);
-
-// For non-idempotent POST requests
-$conservativePolicy = SaneRetryPolicies::conservativeWrite();
-
-$breakerWithConservativeRetry = new CircuitBreaker(
-    $stateStore,
-    $historyStore,
-    $policy,
-    $classifier,
-    [],
-    new \Gohany\Circuitbreaker\SideEffect\NullSideEffectDispatcher(),
-    new \Gohany\Circuitbreaker\Util\NativeClock(),
-    new \Gohany\Circuitbreaker\Store\InMemoryProbeGate(),
-    $retryExecutor,
-    $conservativePolicy
+    SaneRetryPolicies::defaultHttp()
 );
 ```
 
-## Custom Policy with Retry Spec
-
-You can bake retry policies directly into your circuit policy by implementing `RetrySpecProviderInterface`.
+### Custom policy with retry spec
 
 ```php
-use Gohany\Circuitbreaker\Policy\Http\AbstractHttpCircuitPolicy;
-use Gohany\Circuitbreaker\Integration\Rtry\RetrySpec;
-use Gohany\Circuitbreaker\Defaults\Rtry\SaneRetryPolicies;
-use Gohany\Circuitbreaker\Core\CircuitKey;
 use Gohany\Circuitbreaker\Core\CircuitContext;
+use Gohany\Circuitbreaker\Core\CircuitKey;
+use Gohany\Circuitbreaker\Defaults\Rtry\SaneRetryPolicies;
+use Gohany\Circuitbreaker\Integration\Rtry\RetrySpec;
+use Gohany\Circuitbreaker\Policy\Http\AbstractHttpCircuitPolicy;
 
-class MyServicePolicy extends AbstractHttpCircuitPolicy
+final class MyServicePolicy extends AbstractHttpCircuitPolicy
 {
     public function getRetrySpec(CircuitKey $key, CircuitContext $context): ?RetrySpec
     {
-        // Use the default sane policy
         return new RetrySpec(SaneRetryPolicies::defaultHttp());
     }
 }
 ```
 
-## Full Wiring Example (Symfony/Redis)
+---
+
+## Storage backends
+
+### Redis wiring example
 
 ```php
 use Gohany\Circuitbreaker\Core\CircuitBreaker;
-use Gohany\Circuitbreaker\Store\Redis\RedisStateStore;
-use Gohany\Circuitbreaker\Store\Redis\RedisHistoryStore;
-use Gohany\Circuitbreaker\Policy\Http\DefaultHttpCircuitPolicy;
 use Gohany\Circuitbreaker\Defaults\Http\CircuitBreakingPsr18Client;
+use Gohany\Circuitbreaker\Policy\Http\DefaultHttpCircuitPolicy;
+use Gohany\Circuitbreaker\Store\Redis\RedisHistoryStore;
+use Gohany\Circuitbreaker\Store\Redis\RedisProbeGate;
+use Gohany\Circuitbreaker\Store\Redis\RedisStateStore;
 
 $redis = new \Redis();
 $redis->connect('127.0.0.1');
@@ -202,14 +345,12 @@ $breaker = new CircuitBreaker(
 $httpClient = new CircuitBreakingPsr18Client($innerClient, $breaker);
 ```
 
-## PDO (SQL) Storage Example
-
-For persistent storage using any PDO-supported database (MySQL, PostgreSQL, SQLite, etc.).
+### PDO (SQL) storage example
 
 ```php
 use Gohany\Circuitbreaker\Core\CircuitBreaker;
-use Gohany\Circuitbreaker\Store\Pdo\PdoCircuitStateStore;
 use Gohany\Circuitbreaker\Store\Pdo\PdoCircuitHistoryStore;
+use Gohany\Circuitbreaker\Store\Pdo\PdoCircuitStateStore;
 use Gohany\Circuitbreaker\Store\Pdo\PdoProbeGate;
 
 /** @var PDO $pdo */
@@ -226,9 +367,9 @@ $breaker = new CircuitBreaker(
 );
 ```
 
-### Required SQL Schema (PDO)
+#### Required SQL schema (PDO)
 
-You can find the complete SQL schema in `src/Store/Pdo/schema.sql`. 
+The complete schema is in `src/Store/Pdo/schema.sql`.
 
 ```sql
 CREATE TABLE IF NOT EXISTS circuit_states (
@@ -255,14 +396,12 @@ CREATE TABLE IF NOT EXISTS circuit_probe_gates (
 );
 ```
 
-## APCu (Shared Memory) Storage Example
-
-For high-performance, single-server shared memory storage.
+### APCu (shared memory) storage example
 
 ```php
 use Gohany\Circuitbreaker\Core\CircuitBreaker;
-use Gohany\Circuitbreaker\Store\Apcu\ApcuCircuitStateStore;
 use Gohany\Circuitbreaker\Store\Apcu\ApcuCircuitHistoryStore;
+use Gohany\Circuitbreaker\Store\Apcu\ApcuCircuitStateStore;
 use Gohany\Circuitbreaker\Store\Apcu\ApcuProbeGate;
 
 $breaker = new CircuitBreaker(

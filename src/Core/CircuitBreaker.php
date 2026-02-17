@@ -160,7 +160,7 @@ final class CircuitBreaker implements CircuitBreakerInterface
         $outcome->durationMs = (int) $durationMs;
 
         if ($error !== null && !$outcome->success) {
-            $this->logger->error('Circuit operation failed: {error}', [
+            $this->logger->error('Circuit operation failed: ' . $error->getMessage(), [
                 'circuit' => $key->name,
                 'dimensions' => $key->dimensions,
                 'error' => $error->getMessage(),
@@ -189,6 +189,13 @@ final class CircuitBreaker implements CircuitBreakerInterface
         }
 
         return $result;
+    }
+
+    public function recordOutcome(CircuitKey $key, CircuitContext $context, CircuitOutcome $outcome): void
+    {
+        $snapshotBefore = $this->loadSnapshot($key);
+        $plan = $this->policy->onOutcome($key, $context, $outcome, $snapshotBefore);
+        $this->applyPlan($key, $plan);
     }
 
     /**
@@ -256,11 +263,11 @@ final class CircuitBreaker implements CircuitBreakerInterface
                 $level = 'emergency';
             }
 
-            $this->logger->log($level, 'Circuit state transition: {mode}', [
+            $this->logger->log($level, 'Circuit state transition: ' . $plan->newState->mode, [
                 'circuit' => $key->name,
                 'mode' => $plan->newState->mode,
                 'open_until_ms' => $plan->newState->openUntilMs,
-                'transition_meta' => $plan->meta,
+                'transition_meta' => $plan->attributes,
             ]);
         }
 

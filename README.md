@@ -2,7 +2,7 @@
 
 A practical, general-purpose **circuit breaker** library for PHP. 
 
-At its core, this library is about **granting or blocking an action** based on its historical success and current state. While it ships with powerful **HTTP default policies** and assets (as it's a very common use case), it is designed to protect any risky operation—be it database queries, filesystem access, heavy computations, or third-party service calls.
+At its core, this library is about **granting or blocking an action** based on its historical success and current state. While it ships with powerful **HTTP defaults** (as it's a very common use case), it is designed to protect any risky operation—be it database queries, filesystem access, heavy computations, or third-party service calls.
 
 This README focuses on:
 - How to use the circuit breaker **directly** for any operation
@@ -104,14 +104,14 @@ At minimum you:
 ### Basic Example (Any Operation)
 
 ```php
-use Gohany\CircuitBreaker\CircuitBreaker;
-use Gohany\CircuitBreaker\Policy\Http\AbstractHttpCircuitPolicy;
-use Gohany\CircuitBreaker\Core\CircuitKey;
-use Gohany\CircuitBreaker\Core\CircuitContext;
+use Gohany\Circuitbreaker\Core\CircuitBreaker;
+use Gohany\Circuitbreaker\Core\CircuitKey;
+use Gohany\Circuitbreaker\Core\CircuitContext;
+use Gohany\Circuitbreaker\Policy\Http\DefaultHttpCircuitPolicy;
 
 // 1. Choose a policy
 $cfg = new \App\Circuit\Config\DefaultHttpConfig();
-$policy = new \Gohany\CircuitBreaker\Policy\Http\DefaultHttpCircuitPolicy($cfg);
+$policy = new DefaultHttpCircuitPolicy($cfg);
 
 // 2. Setup the breaker
 $breaker = new CircuitBreaker($stateStore, $historyStore, $policy, $classifier);
@@ -135,11 +135,21 @@ Notes:
 
 ## HTTP usage
 
-Because HTTP is the most common use case, we provide several specialized assets to make it easy.
+Because HTTP is the most common use case, we provide a PSR-18 client decorator, multi-circuit coordination, and composable key-building helpers.
 
 For detailed usage patterns, including the **PSR-18 HTTP Client Decorator**, custom key/context building, and full wiring examples, please refer to:
 
 👉 **[examples.md](examples.md)**
+
+Recommended starting points:
+- `CircuitBreakingPsr18Client` (single circuit per request)
+  - See: `examples.md` → [HTTP: single-circuit PSR-18 decorator](examples.md#http-single-circuit-psr-18-decorator)
+- `MultiCircuitBreakingPsr18Client` (ordered list of circuits per request)
+  - See: `examples.md` → [HTTP: multiple circuits per request](examples.md#http-multiple-circuits-per-request)
+- `CircuitBreakerKeyFactory` + key pieces (deterministic, order-independent key composition)
+  - See: `examples.md` → [HTTP key composition](examples.md#http-key-composition-circuitbreakerkeyfactory--pieces)
+- Dual-key fraud pattern (`recordOutcome(...)`)
+  - See: `examples.md` → [Pattern: dual-key reliability + tenant fraud lockout](examples.md#pattern-dual-key-reliability--tenant-fraud-lockout)
 
 ---
 
@@ -198,8 +208,8 @@ For detailed usage patterns and wiring examples, see [examples.md](examples.md).
 
 This project ships an HTTP-oriented base policy/config:
 
-- `Gohany\CircuitBreaker\Policy\Http\AbstractHttpCircuitPolicy`
-- `Gohany\CircuitBreaker\Policy\Http\HttpCircuitPolicyConfig`
+- `Gohany\Circuitbreaker\Policy\Http\AbstractHttpCircuitPolicy`
+- `Gohany\Circuitbreaker\Policy\Http\HttpCircuitPolicyConfig`
 
 A typical HTTP policy treats these as failures:
 - network exceptions (DNS, connect timeout, read timeout)
@@ -225,7 +235,7 @@ Example:
 ```php
 namespace App\Circuit\Config;
 
-use Gohany\CircuitBreaker\Policy\Http\HttpCircuitPolicyConfig;
+use Gohany\Circuitbreaker\Policy\Http\HttpCircuitPolicyConfig;
 
 final class DefaultHttpConfig extends HttpCircuitPolicyConfig
 {
@@ -243,7 +253,7 @@ final class PaymentsHttpConfig extends HttpCircuitPolicyConfig
 Usage:
 
 ```php
-use Gohany\CircuitBreaker\Policy\Http\DefaultHttpCircuitPolicy;
+use Gohany\Circuitbreaker\Policy\Http\DefaultHttpCircuitPolicy;
 
 $policy = new DefaultHttpCircuitPolicy(new \App\Circuit\Config\PaymentsHttpConfig());
 ```
@@ -264,32 +274,29 @@ Example intent:
 - Treat `409` as non-failure (expected conflict)
 
 ```php
-use Gohany\CircuitBreaker\Policy\Http\AbstractHttpCircuitPolicy;
-use Psr\Http\Message\ResponseInterface;
+use Gohany\Circuitbreaker\Policy\Http\DefaultHttpCircuitPolicy;
+use Gohany\Circuitbreaker\Policy\Http\HttpCircuitPolicyConfig;
 
-final class VendorXHttpPolicy extends AbstractHttpCircuitPolicy
+final class VendorXHttpConfig extends HttpCircuitPolicyConfig
 {
-    protected function isFailure(?ResponseInterface $response, ?\Throwable $error): bool
-    {
-        if ($error !== null) {
-            return true; // timeouts, transport errors, etc.
-        }
-
-        if ($response === null) {
-            return true;
-        }
-
-        $code = $response->getStatusCode();
-
-        if ($code === 429) return true;
-        if ($code === 409) return false;
-
-        return $code >= 500;
-    }
+    /**
+     * Example intent:
+     * - Treat `429` as a failure signal (open quickly if the vendor is rate-limiting hard)
+     * - Treat `409` as non-failure (expected conflict)
+     */
+    public array $failureSignals = [
+        'timeout',
+        'connect_error',
+        'dns',
+        'http_5xx',
+        'http_429',
+    ];
 }
+
+$policy = new DefaultHttpCircuitPolicy(new VendorXHttpConfig());
 ```
 
-> The hook method name may differ in your codebase (`isFailure`, `classify`, etc.). The pattern is: centralize classification in one override point.
+The pattern is: centralize classification in your `OutcomeClassifierInterface` and keep per-service differences in config.
 
 ---
 
