@@ -19,6 +19,7 @@ Concrete usage patterns for `gohany/circuitbreaker`.
   - [Redis wiring example](#redis-wiring-example)
   - [PDO (SQL) storage example](#pdo-sql-storage-example)
   - [APCu (shared memory) storage example](#apcu-shared-memory-storage-example)
+- [Integration sanity check script](#integration-sanity-check-script)
 
 ---
 
@@ -415,3 +416,84 @@ $breaker = new CircuitBreaker(
     new ApcuProbeGate()
 );
 ```
+
+---
+
+## Integration sanity check script
+
+If you want to sanity-check a *full integration* (real stores, real keys, side effects visible), run the copyable script:
+
+- `tools/circuit_sanity_check.php`
+
+It drives the breaker into `OPEN`/`HALF_OPEN`/`CLOSED`, and prints side effects to stdout so you can see transitions.
+
+The script also supports basic colored output (green = pass, red = fail) when stdout is a TTY. To force plain output, pass:
+
+```bash
+php tools/circuit_sanity_check.php --mode=single --no-color
+```
+
+### Choose a store
+
+By default (`--store=auto`) the script uses:
+
+- Redis if `ext-redis` is available *and* Redis is reachable
+- otherwise it falls back to an **in-process memory store**
+
+You can force a mode:
+
+```bash
+# Force in-process stores (no Redis required)
+php tools/circuit_sanity_check.php --mode=single --store=memory
+
+# Force Redis (fails if ext/Redis not available)
+php tools/circuit_sanity_check.php --mode=single --store=redis
+```
+
+### Configure (Redis only)
+
+Set these env vars (defaults shown):
+
+```bash
+CB_REDIS_HOST=127.0.0.1
+CB_REDIS_PORT=6379
+CB_REDIS_DB=0
+CB_REDIS_PREFIX=cb_sanity
+
+# Optional: use human-readable keys instead of hashed dimension ids
+CB_HUMAN_KEYS=1
+
+# Optional: same as passing --store=...
+CB_STORE=auto
+```
+
+### Run: single circuit demo
+
+```bash
+php tools/circuit_sanity_check.php --mode=single
+```
+
+What you should see:
+
+- Two simulated failures
+- Circuit opens and denies
+- After a short sleep, a probe succeeds and the circuit closes
+- `SIDE_EFFECT ...` JSON lines for open/close transitions
+
+### Run: multi-circuit demo
+
+```bash
+php tools/circuit_sanity_check.php --mode=multi
+```
+
+What you should see:
+
+- 1st request returns a simulated `500` (reliability circuit moves toward `OPEN`)
+- 2nd request returns `200` with an injected fraud header (tenant fraud circuit opens)
+- 3rd request is denied by the fraud circuit (post-record re-check)
+
+### Notes
+
+- The script uses a short open duration so you can see state changes quickly.
+- For Redis runs, to reset state between runs, change `CB_REDIS_PREFIX` (recommended) or clear keys for that prefix in Redis.
+- For memory runs, state exists only within the current PHP process.

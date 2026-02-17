@@ -12,7 +12,7 @@ final class InMemoryProbeGate implements ProbeGateInterface
 
     public function acquire(CircuitKey $key, ProbeGateConfig $config, int $nowMs): ProbeGateResult
     {
-        $k = (string) $key;
+        $k = $this->keyId($key);
         $current = $this->inFlight[$k] ?? 0;
 
         if ($current >= $config->maxInFlight) {
@@ -25,9 +25,16 @@ final class InMemoryProbeGate implements ProbeGateInterface
 
     public function release(CircuitKey $key): void
     {
-        $k = (string) $key;
+        $k = $this->keyId($key);
         if (isset($this->inFlight[$k]) && $this->inFlight[$k] > 0) {
             $this->inFlight[$k]--;
         }
+    }
+
+    private function keyId(CircuitKey $key): string
+    {
+        $dim = $key->dimensions;
+        ksort($dim);
+        return $key->name . '|' . json_encode($dim);
     }
 }
