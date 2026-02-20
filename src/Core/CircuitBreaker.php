@@ -23,7 +23,6 @@ use Gohany\Circuitbreaker\Policy\CircuitOutcome;
 use Gohany\Circuitbreaker\Consts\CircuitStateMode;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
-use Psr\Log\NullLogger;
 
 final class CircuitBreaker implements CircuitBreakerInterface
 {
@@ -42,7 +41,7 @@ final class CircuitBreaker implements CircuitBreakerInterface
     /** @var mixed */
     private $retryPolicyOrSpec;
 
-    private LoggerInterface $logger;
+    private ?LoggerInterface $logger;
 
     /**
      * @param OverrideDeciderInterface[] $overrideDeciders
@@ -53,7 +52,7 @@ final class CircuitBreaker implements CircuitBreakerInterface
         CircuitHistoryStoreInterface $historyStore,
         CircuitPolicyInterface $policy,
         OutcomeClassifierInterface $classifier,
-        array $overrideDeciders = [],
+        iterable $overrideDeciders = [],
         ?SideEffectDispatcherInterface $sideEffects = null,
         ?ClockInterface $clock = null,
         ?ProbeGateInterface $probeGate = null,
@@ -71,7 +70,7 @@ final class CircuitBreaker implements CircuitBreakerInterface
         $this->probeGate = $probeGate ?: new \Gohany\Circuitbreaker\Store\InMemoryProbeGate();
         $this->retryExecutor = $retryExecutor;
         $this->retryPolicyOrSpec = $retryPolicyOrSpec;
-        $this->logger = $logger ?: new NullLogger();
+        $this->logger = $logger;
     }
 
     public function decide(CircuitKey $key, CircuitContext $context): CircuitDecision
@@ -87,6 +86,7 @@ final class CircuitBreaker implements CircuitBreakerInterface
         $snapshotAtDecision = $res['snapshot'];
 
         if (!$decision->allowed) {
+            $this->logger !== null &&
             $this->logger->warning('Circuit denied access: {reason}', [
                 'circuit' => $key->name,
                 'dimensions' => $key->dimensions,
@@ -105,6 +105,7 @@ final class CircuitBreaker implements CircuitBreakerInterface
 
             if (!$gate->acquired) {
                 $retryAfter = $gate->retryAfterMs > 0 ? $gate->retryAfterMs : ($decision->retryAfterMs ?? 0);
+                $this->logger !== null &&
                 $this->logger->warning('Probe gate blocked: too many in-flight probes', [
                     'circuit' => $key->name,
                     'dimensions' => $key->dimensions,
@@ -160,6 +161,7 @@ final class CircuitBreaker implements CircuitBreakerInterface
         $outcome->durationMs = (int) $durationMs;
 
         if ($error !== null && !$outcome->success) {
+            $this->logger !== null &&
             $this->logger->error('Circuit operation failed: ' . $error->getMessage(), [
                 'circuit' => $key->name,
                 'dimensions' => $key->dimensions,
@@ -263,6 +265,7 @@ final class CircuitBreaker implements CircuitBreakerInterface
                 $level = 'emergency';
             }
 
+            $this->logger !== null &&
             $this->logger->log($level, 'Circuit state transition: ' . $plan->newState->mode, [
                 'circuit' => $key->name,
                 'mode' => $plan->newState->mode,
