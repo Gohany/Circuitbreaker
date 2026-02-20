@@ -31,7 +31,7 @@ final class CircuitBreaker implements CircuitBreakerInterface
     private CircuitPolicyInterface $policy;
     private OutcomeClassifierInterface $classifier;
     /** @var OverrideDeciderInterface[] */
-    private array $overrideDeciders;
+    private iterable $overrideDeciders;
     private SideEffectDispatcherInterface $sideEffects;
     private ClockInterface $clock;
 
