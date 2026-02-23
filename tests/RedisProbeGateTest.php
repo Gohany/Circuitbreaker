@@ -16,7 +16,7 @@ final class RedisProbeGateTest extends TestCase
     public function testAcquireFromOpenExpiredTransitionsToHalfOpenAndIncrements(): void
     {
         $redis = new FakeRedisClient();
-        $redis->setNowMs(10_000);
+        $redis->setNowMs(10000);
 
         $kb = new RedisKeyBuilder('cb', true);
         $gate = new RedisProbeGate($redis, $kb);
@@ -32,7 +32,7 @@ final class RedisProbeGateTest extends TestCase
             'meta_json' => '{}',
         ]);
 
-        $res = $gate->acquire($key, new ProbeGateConfig(1, true), 10_000);
+        $res = $gate->acquire($key, new ProbeGateConfig(1, true), 10000);
         $this->assertTrue($res->acquired);
         $this->assertSame('half_open', $res->mode);
         $this->assertSame(1, $res->inFlight);
@@ -45,7 +45,7 @@ final class RedisProbeGateTest extends TestCase
     public function testAcquireHalfOpenRespectsMaxInFlight(): void
     {
         $redis = new FakeRedisClient();
-        $redis->setNowMs(10_000);
+        $redis->setNowMs(10000);
 
         $kb = new RedisKeyBuilder('cb', true);
         $gate = new RedisProbeGate($redis, $kb);
@@ -59,7 +59,7 @@ final class RedisProbeGateTest extends TestCase
             'half_open_in_flight' => '1',
         ]);
 
-        $res = $gate->acquire($key, new ProbeGateConfig(1, true), 10_000);
+        $res = $gate->acquire($key, new ProbeGateConfig(1, true), 10000);
         $this->assertFalse($res->acquired);
         $this->assertSame(250, $res->retryAfterMs);
     }
@@ -67,7 +67,7 @@ final class RedisProbeGateTest extends TestCase
     public function testReleaseDecrementsInFlight(): void
     {
         $redis = new FakeRedisClient();
-        $redis->setNowMs(10_000);
+        $redis->setNowMs(10000);
 
         $kb = new RedisKeyBuilder('cb', true);
         $gate = new RedisProbeGate($redis, $kb);

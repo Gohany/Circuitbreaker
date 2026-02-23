@@ -20,9 +20,9 @@ final class RedisCircuitAdminTest extends TestCase
     public function testResetHistoryDeletesCountersAndBuckets(): void
     {
         $redis = new FakeRedisClient();
-        $redis->setNowMs(60_000);
+        $redis->setNowMs(60000);
 
-        $clock = new FakePsrClock(60_000);
+        $clock = new FakePsrClock(60000);
 
         $kb = new RedisKeyBuilder('cb', true);
         $overrideStore = new RedisOverrideStore($redis, $kb);
@@ -53,9 +53,9 @@ final class RedisCircuitAdminTest extends TestCase
     public function testForgiveHistoryDeletesBucketsSinceMinuteAndResetsConsecutiveFailures(): void
     {
         $redis = new FakeRedisClient();
-        $redis->setNowMs(180_000);
+        $redis->setNowMs(180000);
 
-        $clock = new FakePsrClock(180_000);
+        $clock = new FakePsrClock(180000);
 
         $kb = new RedisKeyBuilder('cb', true);
         $overrideStore = new RedisOverrideStore($redis, $kb);
@@ -75,7 +75,7 @@ final class RedisCircuitAdminTest extends TestCase
 
         $redis->hMSet($kb->countersKey($key), ['consecutive_failures' => '7']);
 
-        $admin->forgiveHistory($key, 150_000);
+        $admin->forgiveHistory($key, 150000);
 
         $this->assertTrue($redis->exists($kb->bucketKey($key, 1)));
         $this->assertFalse($redis->exists($kb->bucketKey($key, 2)));

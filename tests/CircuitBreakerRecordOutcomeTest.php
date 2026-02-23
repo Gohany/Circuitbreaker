@@ -66,7 +66,7 @@ final class CircuitBreakerRecordOutcomeTest extends TestCase
         $inner = $this->allowingPolicy();
 
         $fraudPolicy = new FraudLockoutPolicyDecorator($inner, new FraudLockoutConfig([
-            'lockoutMs' => 60_000,
+            'lockoutMs' => 60000,
             'fraudSignals' => ['fraud_suspected'],
         ]));
 
@@ -102,7 +102,7 @@ final class CircuitBreakerRecordOutcomeTest extends TestCase
         $fraudBreaker->recordOutcome($tenantFraudKey, $ctx, new CircuitOutcome(true, ['fraud_suspected'], null, [], 0));
 
         $this->assertSame(CircuitStateMode::OPEN, $stateStore->getState($tenantFraudKey)->mode);
-        $this->assertSame(61_000, $stateStore->getState($tenantFraudKey)->openUntilMs);
+        $this->assertSame(61000, $stateStore->getState($tenantFraudKey)->openUntilMs);
 
         // Provider reliability circuit is unaffected by the tenant-scoped fraud lockout.
         $this->assertSame(CircuitStateMode::CLOSED, $stateStore->getState($providerReliabilityKey)->mode);
