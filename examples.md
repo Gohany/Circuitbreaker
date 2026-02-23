@@ -15,11 +15,19 @@ Concrete usage patterns for `gohany/circuitbreaker`.
 - [Retries](#retries)
   - [Using `SaneRetryPolicies`](#using-saneretrypolicies)
   - [Custom policy with retry spec](#custom-policy-with-retry-spec)
+- [Bulkheads](#bulkheads)
+  - [Local semaphore bulkhead](#local-semaphore-bulkhead)
+  - [Redis pool bulkhead (global max concurrency)](#redis-pool-bulkhead-global-max-concurrency)
+  - [Redis fair-queue bulkhead (lanes + fairness)](#redis-fair-queue-bulkhead-lanes--fairness)
+- [Resilience pipeline (middleware composition)](#resilience-pipeline-middleware-composition)
+- [Operational overrides (Redis)](#operational-overrides-redis)
+- [Observability: `EmitterInterface` and PSR-3 logging](#observability-emitterinterface-and-psr-3-logging)
 - [Storage backends](#storage-backends)
   - [Redis wiring example](#redis-wiring-example)
   - [PDO (SQL) storage example](#pdo-sql-storage-example)
   - [APCu (shared memory) storage example](#apcu-shared-memory-storage-example)
 - [Integration sanity check script](#integration-sanity-check-script)
+  - [Fair-queue sanity scripts](#fair-queue-sanity-scripts)
 
 ---
 
@@ -325,22 +333,28 @@ final class MyServicePolicy extends AbstractHttpCircuitPolicy
 use Gohany\Circuitbreaker\Core\CircuitBreaker;
 use Gohany\Circuitbreaker\Defaults\Http\CircuitBreakingPsr18Client;
 use Gohany\Circuitbreaker\Policy\Http\DefaultHttpCircuitPolicy;
-use Gohany\Circuitbreaker\Store\Redis\RedisHistoryStore;
+use Gohany\Circuitbreaker\Store\Redis\RedisCircuitHistoryStore;
+use Gohany\Circuitbreaker\Store\Redis\RedisCircuitStateStore;
+use Gohany\Circuitbreaker\Store\Redis\ExtRedisClient as StoreExtRedisClient;
+use Gohany\Circuitbreaker\Store\Redis\RedisKeyBuilder;
 use Gohany\Circuitbreaker\Store\Redis\RedisProbeGate;
-use Gohany\Circuitbreaker\Store\Redis\RedisStateStore;
 
 $redis = new \Redis();
 $redis->connect('127.0.0.1');
 
+$storeRedis = new StoreExtRedisClient($redis);
+
+$kb = new RedisKeyBuilder('cb', true);
+
 $breaker = new CircuitBreaker(
-    new RedisStateStore($redis),
-    new RedisHistoryStore($redis),
+    new RedisCircuitStateStore($storeRedis, $kb),
+    new RedisCircuitHistoryStore($storeRedis, $kb),
     new DefaultHttpCircuitPolicy(),
     new MyOutcomeClassifier(),
     [],
     new MySideEffectDispatcher(),
     new NativeClock(),
-    new RedisProbeGate($redis)
+    new RedisProbeGate($storeRedis, $kb)
 );
 
 $httpClient = new CircuitBreakingPsr18Client($innerClient, $breaker);
@@ -385,15 +399,17 @@ CREATE TABLE IF NOT EXISTS circuit_states (
 CREATE TABLE IF NOT EXISTS circuit_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT, -- Or SERIAL/BIGSERIAL
     circuit_key VARCHAR(255) NOT NULL,
-    outcome VARCHAR(64) NOT NULL,
-    recorded_at_ms BIGINT NOT NULL,
-    details_json TEXT
+    ts_ms BIGINT NOT NULL,
+    success INT NOT NULL,
+    signals_json TEXT,
+    duration_ms INT NOT NULL DEFAULT 0,
+    attributes_json TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_circuit_history_key ON circuit_history(circuit_key, recorded_at_ms);
+CREATE INDEX IF NOT EXISTS idx_circuit_history_key ON circuit_history(circuit_key, ts_ms);
 
 CREATE TABLE IF NOT EXISTS circuit_probe_gates (
     circuit_key VARCHAR(255) PRIMARY KEY,
-    expires_at_ms BIGINT NOT NULL
+    in_flight INT NOT NULL
 );
 ```
 
@@ -419,6 +435,190 @@ $breaker = new CircuitBreaker(
 
 ---
 
+## Bulkheads
+
+Bulkheads are concurrency limits.
+
+They answer a different question than circuit breakers:
+
+- circuit breaker: "should we try?"
+- bulkhead: "how many may try concurrently?"
+
+### Local semaphore bulkhead
+
+Use `SemaphoreBulkhead` when you want a per-process limit.
+
+```php
+use Gohany\Circuitbreaker\Bulkhead\SemaphoreBulkhead;
+
+$bulkhead = new SemaphoreBulkhead(10);
+
+$permit = $bulkhead->acquire('default');
+try {
+    // do work
+} finally {
+    $permit->release();
+}
+```
+
+### Redis pool bulkhead (global max concurrency)
+
+Use `RedisPoolBulkhead` when you want a shared max concurrency across many nodes.
+
+```php
+use Gohany\Circuitbreaker\Bulkhead\RedisPoolBulkhead;
+use Gohany\Circuitbreaker\Util\ExtRedisClient;
+
+$redis = new \Redis();
+$redis->connect('127.0.0.1');
+
+$client = new ExtRedisClient($redis);
+$bulkhead = new RedisPoolBulkhead($client, 'db-main', 50, 'cb');
+
+$permit = $bulkhead->acquire('default');
+try {
+    // do work
+} finally {
+    $permit->release();
+}
+```
+
+### Redis fair-queue bulkhead (lanes + fairness)
+
+`RedisFairQueueBulkhead` is a distributed wait-queue bulkhead that supports lanes.
+
+It is useful when you want to protect a shared dependency with both:
+
+- a global cap
+- lane caps (fixed / percent / weighted)
+- a queue that avoids head-of-line blocking
+
+```php
+use Gohany\Circuitbreaker\Bulkhead\LanePolicy;
+use Gohany\Circuitbreaker\Bulkhead\PoolPolicy;
+use Gohany\Circuitbreaker\Bulkhead\RedisFairQueueBulkhead;
+use Gohany\Circuitbreaker\Util\ExtRedisClient;
+
+$redis = new \Redis();
+$redis->connect('127.0.0.1');
+
+$client = new ExtRedisClient($redis);
+
+$policy = new PoolPolicy(
+    'db-main',
+    20,
+    PoolPolicy::MODE_WEIGHTED,
+    0.60,
+    [
+        'auth.login' => LanePolicy::weight('auth.login', 1),
+        'payments.charge' => LanePolicy::weight('payments.charge', 6),
+    ]
+);
+
+$bulkhead = new RedisFairQueueBulkhead($client, $policy, 'cb', null, [
+    'scan_limit' => 64,
+    'pump_per_call' => 3,
+    'grant_ttl_ms' => 250,
+    'poll_interval_ms' => 10,
+]);
+
+$permit = $bulkhead->acquire('payments.charge', 0.25);
+try {
+    // do work
+} finally {
+    $permit->release();
+}
+```
+
+---
+
+## Resilience pipeline (middleware composition)
+
+When you want one entry point for resilience, use `ResiliencePipeline`.
+
+```php
+use Gohany\Circuitbreaker\Resilience\Context;
+use Gohany\Circuitbreaker\Resilience\ResiliencePipeline;
+use Gohany\Circuitbreaker\Resilience\CircuitBreakerMiddleware;
+use Gohany\Circuitbreaker\Resilience\BulkheadMiddleware;
+use Gohany\Circuitbreaker\Resilience\RetryMiddleware;
+
+// $breaker = ... (Core\CircuitBreaker)
+// $bulkhead = ... (BulkheadInterface)
+// $retry = ... (Integration\Rtry\RetryExecutorInterface)
+
+$pipeline = new ResiliencePipeline([
+    new BulkheadMiddleware($bulkhead),
+    new CircuitBreakerMiddleware($breaker),
+    new RetryMiddleware($retry),
+]);
+
+$ctx = new Context('payments.charge', 'db-main');
+
+$result = $pipeline->execute($ctx, function () {
+    // risky operation
+    return 'ok';
+});
+```
+
+---
+
+## Operational overrides (Redis)
+
+Overrides are for incident response: force allow/deny/open temporarily.
+
+```php
+use Gohany\Circuitbreaker\Core\CircuitContext;
+use Gohany\Circuitbreaker\Core\CircuitKey;
+use Gohany\Circuitbreaker\Override\Redis\RedisOverrideDecider;
+use Gohany\Circuitbreaker\Override\Redis\RedisOverrideStore;
+use Gohany\Circuitbreaker\Store\Redis\RedisKeyBuilder;
+use Gohany\Circuitbreaker\Store\Redis\ExtRedisClient as StoreExtRedisClient;
+
+$redis = new \Redis();
+$redis->connect('127.0.0.1');
+
+$storeRedis = new StoreExtRedisClient($redis);
+
+$kb = new RedisKeyBuilder('cb', true);
+$store = new RedisOverrideStore($storeRedis, $kb);
+$decider = new RedisOverrideDecider($store, new \Gohany\Circuitbreaker\Util\NativeClock());
+
+$key = new CircuitKey('payments_http', ['provider' => 'acme']);
+
+// Example: force deny for 5 minutes
+$store->set($key, [
+    'force_allow' => '',
+    'force_deny' => '1',
+    'forced_mode' => 'open',
+    'forced_until_ms' => (string) ((int) (microtime(true) * 1000) + 5 * 60 * 1000),
+    'reason' => 'incident',
+    'meta_json' => '{"ticket":"INC-123"}',
+], 5 * 60);
+
+$overrideDecision = $decider->decide($key, new CircuitContext(null, [], []));
+```
+
+---
+
+## Observability: `EmitterInterface` and PSR-3 logging
+
+Some modules emit structured events via `EmitterInterface`.
+
+```php
+use Gohany\Circuitbreaker\Observability\EmitterInterface;
+
+final class StdoutEmitter implements EmitterInterface
+{
+    public function emit(string $name, array $fields = []): void
+    {
+        fwrite(STDOUT, json_encode(['event' => $name, 'fields' => $fields]) . "\n");
+    }
+}
+```
+
+The core circuit breaker also accepts a PSR-3 logger. See `tests/LoggingTest.php` for a minimal pattern.
+
 ## Integration sanity check script
 
 If you want to sanity-check a *full integration* (real stores, real keys, side effects visible), run the copyable script:
@@ -432,6 +632,20 @@ The script also supports basic colored output (green = pass, red = fail) when st
 ```bash
 php tools/circuit_sanity_check.php --mode=single --no-color
 ```
+
+### Fair-queue sanity scripts
+
+If you are using `Bulkhead\RedisFairQueueBulkhead` and you want a quick end-to-end verification against a real Redis:
+
+```bash
+# Basic fair-queue sanity run (prints OK/FAIL)
+./bin/cb-sanity-fair-queue.sh
+
+# Extended run (spawns the worker fixture and validates output)
+./bin/cb-sanity-fair-queue-extended.sh
+```
+
+Both scripts use `GOHANY_CB_TEST_REDIS_DSN` / `GOHANY_CB_TEST_REDIS_PREFIX` (with reasonable defaults).
 
 ### Choose a store
 
