@@ -541,7 +541,7 @@ use Gohany\Circuitbreaker\Resilience\Context;
 use Gohany\Circuitbreaker\Resilience\ResiliencePipeline;
 use Gohany\Circuitbreaker\Resilience\CircuitBreakerMiddleware;
 use Gohany\Circuitbreaker\Resilience\BulkheadMiddleware;
-use Gohany\Circuitbreaker\Resilience\RetryMiddleware;
+use Gohany\Circuitbreaker\Resilience\RtryRetryMiddleware;
 
 // $breaker = ... (Core\CircuitBreaker)
 // $bulkhead = ... (BulkheadInterface)
@@ -550,7 +550,7 @@ use Gohany\Circuitbreaker\Resilience\RetryMiddleware;
 $pipeline = new ResiliencePipeline([
     new BulkheadMiddleware($bulkhead),
     new CircuitBreakerMiddleware($breaker),
-    new RetryMiddleware($retry),
+    new RtryRetryMiddleware('rtry:attempts=3;delay=50ms;on=default'),
 ]);
 
 $ctx = new Context('payments.charge', 'db-main');

@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Gohany\Circuitbreaker\Resilience;
 
+/**
+ * @deprecated Use a `rtry:` spec string with {@see RtryRetryMiddleware}.
+ */
 final class RetryConfig
 {
     /** @var int */

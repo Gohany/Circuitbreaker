@@ -209,7 +209,7 @@ When you start composing these primitives, you eventually want a single “do th
 `ResiliencePipeline` is a minimal middleware chain (see `src/Resilience/*`) that can wrap an operation with:
 
 - circuit breaker middleware (`CircuitBreakerMiddleware`)
-- retry middleware (`RetryMiddleware`)
+- retry middleware (`RtryRetryMiddleware`)
 - bulkhead middleware (`BulkheadMiddleware`)
 
 The pipeline is intentionally small: you can add/remove pieces without rewriting your business code.
@@ -286,7 +286,7 @@ This is the explicit list of “what this project now does”, grouped by concep
 
 - `Resilience\ResiliencePipeline` and middlewares:
   - `Resilience\CircuitBreakerMiddleware`
-  - `Resilience\RetryMiddleware`
+  - `Resilience\RtryRetryMiddleware`
   - `Resilience\BulkheadMiddleware`
 
 ### Observability

@@ -7,77 +7,40 @@ namespace Gohany\Circuitbreaker\Resilience;
 use Gohany\Circuitbreaker\Observability\EmitterInterface;
 use Gohany\Circuitbreaker\Observability\NullEmitter;
 
+/**
+ * @deprecated Use {@see RtryRetryMiddleware}.
+ *
+ * This middleware is retained for backward compatibility, but new code should use
+ * `RtryRetryMiddleware` directly so retry behaviour is driven by a `rtry:` spec string.
+ */
 final class RetryMiddleware implements ResilienceMiddlewareInterface
 {
-    /** @var RetryConfig */
-    private $cfg;
-    /** @var EmitterInterface */
-    private $emitter;
+    /** @var RtryRetryMiddleware */
+    private $inner;
 
-    public function __construct(RetryConfig $cfg, ?EmitterInterface $emitter = null)
+    /**
+     * @param RetryConfig|string $cfgOrSpec
+     */
+    public function __construct($cfgOrSpec, ?EmitterInterface $emitter = null)
     {
-        $this->cfg = $cfg;
-        $this->emitter = $emitter ?: new NullEmitter();
+        $emitter = $emitter ?: new NullEmitter();
+
+        if ($cfgOrSpec instanceof RetryConfig) {
+            // Best-effort mapping from the legacy config to a rtry spec.
+            // Note: legacy `retryOn` exception-class filtering is NOT representable as a rtry spec.
+            // If you relied on that behaviour, migrate to an explicit rtry decider in your wiring.
+            $attempts = max(1, (int) $cfgOrSpec->maxAttempts);
+            $delayMs = max(0, (int) $cfgOrSpec->baseDelayMs);
+            $spec = 'rtry:a=' . $attempts . ';d=' . $delayMs . 'ms;on=default';
+        } else {
+            $spec = (string) $cfgOrSpec;
+        }
+
+        $this->inner = new RtryRetryMiddleware($spec, $emitter);
     }
 
     public function handle(Context $ctx, callable $next)
     {
-        $attempt = 0;
-        $last = null;
-
-        while (true) {
-            $attempt++;
-            try {
-                $this->emitter->emit('retry.attempt', [
-                    'operation' => $ctx->getOperation(),
-                    'lane' => $ctx->getLane(),
-                    'attempt' => $attempt,
-                    'max_attempts' => $this->cfg->maxAttempts,
-                ]);
-                return $next($ctx);
-            } catch (\Throwable $e) {
-                $last = $e;
-                if ($attempt >= $this->cfg->maxAttempts || !$this->shouldRetry($e)) {
-                    $this->emitter->emit('retry.give_up', [
-                        'operation' => $ctx->getOperation(),
-                        'lane' => $ctx->getLane(),
-                        'attempt' => $attempt,
-                        'error_class' => get_class($e),
-                    ]);
-                    throw $e;
-                }
-
-                $delayMs = $this->computeDelayMs($attempt);
-                $this->emitter->emit('retry.sleep', [
-                    'operation' => $ctx->getOperation(),
-                    'lane' => $ctx->getLane(),
-                    'attempt' => $attempt,
-                    'delay_ms' => $delayMs,
-                    'error_class' => get_class($e),
-                ]);
-                usleep($delayMs * 1000);
-            }
-        }
-    }
-
-    private function shouldRetry(\Throwable $e): bool
-    {
-        foreach ($this->cfg->retryOn as $class) {
-            if ($e instanceof $class) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private function computeDelayMs(int $attempt): int
-    {
-        $exp = (int) ($this->cfg->baseDelayMs * (2 ** max(0, $attempt - 2)));
-        $delay = min($this->cfg->maxDelayMs, $exp);
-        if ($this->cfg->jitter) {
-            $delay = (int) random_int((int) floor($delay * 0.5), (int) ceil($delay * 1.5));
-            $delay = max(0, min($this->cfg->maxDelayMs, $delay));
-        }
-        return $delay;
+        return $this->inner->handle($ctx, $next);
     }
 }
