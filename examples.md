@@ -530,6 +530,85 @@ try {
 }
 ```
 
+#### Global budget by number (absolute lane caps)
+
+If you want a hard “numbers-based” budget per lane (e.g. payments gets 8 concurrent slots, login gets 2),
+use `PoolPolicy::MODE_FIXED` with `LanePolicy::fixed()`:
+
+```php
+use Gohany\Circuitbreaker\Bulkhead\LanePolicy;
+use Gohany\Circuitbreaker\Bulkhead\PoolPolicy;
+use Gohany\Circuitbreaker\Bulkhead\RedisFairQueueBulkhead;
+use Gohany\Circuitbreaker\Util\ExtRedisClient;
+
+$redis = new \Redis();
+$redis->connect('127.0.0.1');
+
+$client = new ExtRedisClient($redis);
+
+$policy = new PoolPolicy(
+    'db-main',
+    10, // global max concurrency across all lanes
+    PoolPolicy::MODE_FIXED,
+    0.60, // soft borrowing threshold (see README for details)
+    [
+        // Absolute per-lane caps
+        'auth.login' => LanePolicy::fixed('auth.login', 2),
+        'payments.charge' => LanePolicy::fixed('payments.charge', 8),
+    ]
+);
+
+$bulkhead = new RedisFairQueueBulkhead($client, $policy, 'cb');
+
+$permit = $bulkhead->acquire('payments.charge', 0.25);
+try {
+    // do work
+} finally {
+    $permit->release();
+}
+```
+
+#### Global budget by percent (lane caps derived from `globalMax`)
+
+If you want to allocate a *fraction* of the global pool to each lane (e.g. login gets 10%, payments gets 90%),
+use `PoolPolicy::MODE_PERCENT` with `LanePolicy::percent()`:
+
+```php
+use Gohany\Circuitbreaker\Bulkhead\LanePolicy;
+use Gohany\Circuitbreaker\Bulkhead\PoolPolicy;
+use Gohany\Circuitbreaker\Bulkhead\RedisFairQueueBulkhead;
+use Gohany\Circuitbreaker\Util\ExtRedisClient;
+
+$redis = new \Redis();
+$redis->connect('127.0.0.1');
+
+$client = new ExtRedisClient($redis);
+
+$policy = new PoolPolicy(
+    'db-main',
+    50, // global max concurrency across all lanes
+    PoolPolicy::MODE_PERCENT,
+    0.60,
+    [
+        // Percent-of-global lane budgets
+        'auth.login' => LanePolicy::percent('auth.login', 0.10),
+        'payments.charge' => LanePolicy::percent('payments.charge', 0.90),
+    ]
+);
+
+$bulkhead = new RedisFairQueueBulkhead($client, $policy, 'cb');
+
+$permit = $bulkhead->acquire('auth.login', 0.25);
+try {
+    // do work
+} finally {
+    $permit->release();
+}
+```
+
+Note: in percent mode, `RedisFairQueueBulkhead` clamps each computed lane cap to at least 1
+(`max(1, floor(globalMax * pct))`). This prevents “0-cap lanes” when `globalMax` is small.
+
 ---
 
 ## Resilience pipeline (middleware composition)
@@ -541,19 +620,38 @@ use Gohany\Circuitbreaker\Resilience\Context;
 use Gohany\Circuitbreaker\Resilience\ResiliencePipeline;
 use Gohany\Circuitbreaker\Resilience\CircuitBreakerMiddleware;
 use Gohany\Circuitbreaker\Resilience\BulkheadMiddleware;
+use Gohany\Circuitbreaker\Resilience\MapLaneRouter;
 use Gohany\Circuitbreaker\Resilience\RtryRetryMiddleware;
 
 // $breaker = ... (Core\CircuitBreaker)
 // $bulkhead = ... (BulkheadInterface)
 // $retry = ... (Integration\Rtry\RetryExecutorInterface)
 
+$laneRouter = new MapLaneRouter('route',
+    [
+        // Exact route name mapping (framework-specific)
+        'auth_login' => 'auth.login',
+        'payments_charge' => 'payments.charge',
+    ],
+    [
+        // Prefix mapping (optional)
+        'payments_' => 'payments.charge',
+    ],
+    [
+        // Regex mapping (optional)
+        '/^payments\./' => 'payments.charge',
+    ],
+    'auth.login'
+);
+
 $pipeline = new ResiliencePipeline([
-    new BulkheadMiddleware($bulkhead),
+    new BulkheadMiddleware($bulkhead, null, $laneRouter),
     new CircuitBreakerMiddleware($breaker),
     new RtryRetryMiddleware('rtry:attempts=3;delay=50ms;on=default'),
 ]);
 
 $ctx = new Context('payments.charge', 'db-main');
+$ctx->set('route', 'payments_charge');
 
 $result = $pipeline->execute($ctx, function () {
     // risky operation

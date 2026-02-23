@@ -30,6 +30,11 @@ final class Context
         return $this->lane;
     }
 
+    public function setLane(string $lane): void
+    {
+        $this->lane = $lane;
+    }
+
     /**
      * @param mixed $value
      */
