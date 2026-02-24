@@ -24,6 +24,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Codecov uploader needs git history/metadata to properly associate uploads.
+          fetch-depth: 0
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
@@ -47,7 +50,8 @@ jobs:
           composer test:coverage
 
       - name: Upload coverage to Codecov
-        if: ${{ matrix.coverage }}
+        # On fork PRs, secrets are not available; skip upload rather than failing the whole CI.
+        if: ${{ matrix.coverage && secrets.CODECOV_TOKEN != '' }}
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
