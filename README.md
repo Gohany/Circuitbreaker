@@ -1,4 +1,6 @@
-# Gohany CircuitBreaker
+![CI](https://github.com/Gohany/circuitbreaker/actions/workflows/ci.yml/badge.svg)
+[![codecov](https://codecov.io/gh/Gohany/circuitbreaker/branch/main/graph/badge.svg)](https://codecov.io/gh/Gohany/circuitbreaker)
+# Gohany Circuitbreaker
 
 This project is a practical, general-purpose **circuit breaker** library for PHP (`>=7.4`).
 
