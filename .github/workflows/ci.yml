@@ -21,6 +21,11 @@ jobs:
           - php: '8.3'
             coverage: true
 
+    env:
+      # Secrets are not available in GitHub Actions expression contexts like `if:`.
+      # Expose it via env so we can safely gate the Codecov step without failing fork PRs.
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,10 +56,10 @@ jobs:
 
       - name: Upload coverage to Codecov
         # On fork PRs, secrets are not available; skip upload rather than failing the whole CI.
-        if: ${{ matrix.coverage && secrets.CODECOV_TOKEN != '' }}
+        if: ${{ matrix.coverage && env.CODECOV_TOKEN != '' }}
         uses: codecov/codecov-action@v4
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
+          token: ${{ env.CODECOV_TOKEN }}
           files: build/logs/clover.xml
           fail_ci_if_error: true
 
