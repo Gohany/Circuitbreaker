@@ -451,7 +451,7 @@ Use `SemaphoreBulkhead` when you want a per-process limit.
 ```php
 use Gohany\Circuitbreaker\Bulkhead\SemaphoreBulkhead;
 
-$bulkhead = new SemaphoreBulkhead(10);
+$bulkhead = new SemaphoreBulkhead('default', 10);
 
 $permit = $bulkhead->acquire('default');
 try {
@@ -467,13 +467,23 @@ Use `RedisPoolBulkhead` when you want a shared max concurrency across many nodes
 
 ```php
 use Gohany\Circuitbreaker\Bulkhead\RedisPoolBulkhead;
+use Gohany\Circuitbreaker\Bulkhead\PoolPolicy;
 use Gohany\Circuitbreaker\Util\ExtRedisClient;
 
 $redis = new \Redis();
 $redis->connect('127.0.0.1');
 
 $client = new ExtRedisClient($redis);
-$bulkhead = new RedisPoolBulkhead($client, 'db-main', 50, 'cb');
+
+$policy = new PoolPolicy(
+    poolId: 'db-main',
+    globalMaxConcurrency: 50,
+    lanePolicies: [
+        'default' => 50,
+    ],
+);
+
+$bulkhead = new RedisPoolBulkhead($client, $policy, 'cb');
 
 $permit = $bulkhead->acquire('default');
 try {

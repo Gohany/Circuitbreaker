@@ -24,13 +24,25 @@ final class ExtRedisClient
 
     private ?RedisLuaCapabilitiesDetector $capDetector = null;
 
+    private Redis $redis;
+    private ?string $luaCapabilityKey;
+    private int $luaCapabilityTtlSeconds;
+    private int $luaCapabilityLocalTtlSeconds;
+    private bool $luaCapabilityRedisCacheEnabled;
+
     public function __construct(
-        private readonly Redis $redis,
-        private readonly ?string $luaCapabilityKey = null,
-        private readonly int $luaCapabilityTtlSeconds = 2592000,
-        private readonly int $luaCapabilityLocalTtlSeconds = 3600,
-        private readonly bool $luaCapabilityRedisCacheEnabled = true,
-    ) {}
+        Redis $redis,
+        ?string $luaCapabilityKey = null,
+        int $luaCapabilityTtlSeconds = 2592000,
+        int $luaCapabilityLocalTtlSeconds = 3600,
+        bool $luaCapabilityRedisCacheEnabled = true
+    ) {
+        $this->redis = $redis;
+        $this->luaCapabilityKey = $luaCapabilityKey;
+        $this->luaCapabilityTtlSeconds = $luaCapabilityTtlSeconds;
+        $this->luaCapabilityLocalTtlSeconds = $luaCapabilityLocalTtlSeconds;
+        $this->luaCapabilityRedisCacheEnabled = $luaCapabilityRedisCacheEnabled;
+    }
 
     public function raw(): Redis
     {
@@ -58,7 +70,10 @@ final class ExtRedisClient
             $sha = $this->shaCache[$name] ?? null;
             if (!$sha) {
                 $sha = $this->redis->script('load', $lua);
-                $this->shaCache[$name] = (string) $sha;
+                if (!is_string($sha) || $sha === '') {
+                    throw new \RuntimeException('Redis SCRIPT LOAD did not return a valid SHA for script: ' . $name);
+                }
+                $this->shaCache[$name] = $sha;
             }
 
             try {
@@ -67,8 +82,11 @@ final class ExtRedisClient
                 // Failover / restart / SCRIPT FLUSH can cause NOSCRIPT even when capability is script_cacheable.
                 if (stripos($e->getMessage(), 'NOSCRIPT') !== false) {
                     $sha = $this->redis->script('load', $lua);
-                    $this->shaCache[$name] = (string) $sha;
-                    return $this->redis->evalSha((string)$sha, $params, $numKeys);
+                    if (!is_string($sha) || $sha === '') {
+                        throw new \RuntimeException('Redis SCRIPT LOAD did not return a valid SHA for script reload: ' . $name);
+                    }
+                    $this->shaCache[$name] = $sha;
+                    return $this->redis->evalSha($sha, $params, $numKeys);
                 }
                 throw $e;
             }
@@ -84,7 +102,20 @@ final class ExtRedisClient
     public function getLuaCapability(): string
     {
         if ($this->capDetector === null) {
-            $key = $this->luaCapabilityKey ?? 'cb:redis:lua_cap:default';
+            if ($this->luaCapabilityKey !== null) {
+                $key = $this->luaCapabilityKey;
+            } else {
+                $key = 'cb:redis:lua_cap:default';
+                // Best-effort: derive an endpoint-specific cache key to avoid cross-endpoint poisoning.
+                try {
+                    $host = method_exists($this->redis, 'getHost') ? (string) $this->redis->getHost() : 'unknown';
+                    $port = method_exists($this->redis, 'getPort') ? (int) $this->redis->getPort() : 0;
+                    $db = method_exists($this->redis, 'getDbNum') ? (int) $this->redis->getDbNum() : 0;
+                    $key = sprintf('cb:redis:lua_cap:%s:%d:%d', $host, $port, $db);
+                } catch (RedisException $e) {
+                    // Keep legacy default key.
+                }
+            }
             $this->capDetector = new RedisLuaCapabilitiesDetector(
                 $this->redis,
                 $key,

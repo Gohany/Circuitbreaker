@@ -69,6 +69,7 @@ function arg(string $name, $default = null) {
 
 $dsn = (string) arg('dsn', getenv('GOHANY_CB_TEST_REDIS_DSN') ?: '');
 $prefix = (string) arg('prefix', getenv('GOHANY_CB_TEST_REDIS_PREFIX') ?: 'it');
+$poolId = (string) arg('poolId', 'it');
 $lane = (string) arg('lane', 'default');
 $globalMax = (int) arg('globalMax', 10);
 $mode = (string) arg('mode', 'fixed');
@@ -80,11 +81,14 @@ $pumpPerCall = (int) arg('pumpPerCall', 3);
 $grantTtlMs = (int) arg('grantTtlMs', 250);
 $pollIntervalMs = (int) arg('pollIntervalMs', 10);
 
+$crashAfterGrant = (int) arg('crashAfterGrant', 0);
+
 $laneWeightsJson = (string) arg('laneWeights', '{}');
 $laneCapsJson = (string) arg('laneCaps', '{}');
 
 $barrierKey = (string) arg('barrierKey', '');
 $readyKey = (string) arg('readyKey', '');
+$barrierTimeoutMs = (int) arg('barrierTimeoutMs', 5000);
 
 if ($dsn === '') {
     fwrite(STDERR, "Missing --dsn or GOHANY_CB_TEST_REDIS_DSN\n");
@@ -118,12 +122,17 @@ if ($readyKey !== '') {
 }
 if ($barrierKey !== '') {
     // Wait until barrier released
-    $deadline = microtime(true) + 2.0;
+    $deadline = microtime(true) + max(0.1, ((float) $barrierTimeoutMs) / 1000.0);
     while (microtime(true) < $deadline) {
         if ($redis->exists($barrierKey)) {
             break;
         }
         usleep(5000);
+    }
+
+    if (!$redis->exists($barrierKey)) {
+        fwrite(STDERR, "Barrier was not released in time: {$barrierKey}\n");
+        exit(3);
     }
 }
 
@@ -175,12 +184,37 @@ try {
     }
 
     $poolPolicy = new \Gohany\Circuitbreaker\Bulkhead\PoolPolicy(
-        'it',
+        $poolId,
         $globalMax,
         $mode,
         0.0,
         $lanes
     );
+
+    // Simulate a process crash after a grant is created but before it is finalized/consumed.
+    // This exercises grant TTL recovery behaviour: the leaked grant key should expire and not permanently block progress.
+    if ($crashAfterGrant === 1) {
+        $reqId = bin2hex(random_bytes(8));
+        $nowMs = (int) (microtime(true) * 1000);
+        $deadlineMs = $nowMs + max(1, $timeoutMs);
+        $member = $reqId . '|' . $lane . '|' . (string) $deadlineMs;
+
+        $queueKey = $prefix . ':bulkhead:pool:' . $poolId . ':queue';
+        $grantKey = $prefix . ':bulkhead:pool:' . $poolId . ':grant:' . $reqId;
+
+        // Enqueue, then grant, then exit without consuming (no counter increments).
+        $redis->zAdd($queueKey, (float) $nowMs, $member);
+        $redis->zRem($queueKey, $member);
+        $redis->set($grantKey, $lane, ['nx' => true, 'px' => $grantTtlMs]);
+
+        echo json_encode([
+            'lane' => $lane,
+            'ok' => 0,
+            'rejected' => 0,
+            'errors' => 0,
+        ]) . PHP_EOL;
+        exit(0);
+    }
 
     $bulkhead = new \Gohany\Circuitbreaker\Bulkhead\RedisFairQueueBulkhead(
         $client,

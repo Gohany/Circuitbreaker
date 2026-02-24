@@ -58,7 +58,15 @@ final class PdoProbeGate implements ProbeGateInterface
         }
 
         // Denied.
-        return new ProbeGateResult(false, 'half_open', $max, 250);
+        $cur = 0;
+        try {
+            $cur = (int) $this->pdo
+                ->query("SELECT in_flight FROM {$this->tableName} WHERE circuit_key = " . $this->pdo->quote($key->id()))
+                ->fetchColumn();
+        } catch (\Throwable $e) {
+            // best-effort; keep cur=0
+        }
+        return new ProbeGateResult(false, 'half_open', $cur, 250);
     }
 
     public function release(CircuitKey $key): void

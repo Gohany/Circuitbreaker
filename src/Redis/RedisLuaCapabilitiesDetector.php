@@ -16,13 +16,25 @@ final class RedisLuaCapabilitiesDetector
     /** @var array<string, array{cap:string, expires:int}> */
     private static array $localCache = [];
 
+    private Redis $redis;
+    private string $capabilityKey;
+    private int $redisTtlSeconds;
+    private int $localTtlSeconds;
+    private bool $enableRedisCache;
+
     public function __construct(
-        private readonly Redis $redis,
-        private readonly string $capabilityKey,
-        private readonly int $redisTtlSeconds = 2592000, // 30 days
-        private readonly int $localTtlSeconds = 3600,    // 1 hour per-process
-        private readonly bool $enableRedisCache = true,
-    ) {}
+        Redis $redis,
+        string $capabilityKey,
+        int $redisTtlSeconds = 2592000,
+        int $localTtlSeconds = 3600,
+        bool $enableRedisCache = true
+    ) {
+        $this->redis = $redis;
+        $this->capabilityKey = $capabilityKey;
+        $this->redisTtlSeconds = $redisTtlSeconds;
+        $this->localTtlSeconds = $localTtlSeconds;
+        $this->enableRedisCache = $enableRedisCache;
+    }
 
     public function getCapability(): string
     {
