@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace tests\Policy\Fraud;
+namespace tests\Fraud;
 
 use Gohany\Circuitbreaker\Consts\CircuitStateMode;
 use Gohany\Circuitbreaker\Core\CircuitContext;

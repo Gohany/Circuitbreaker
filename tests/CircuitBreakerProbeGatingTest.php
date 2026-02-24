@@ -30,7 +30,7 @@ final class CircuitBreakerProbeGatingTest extends TestCase
 {
     public function testProbeGateUsesPolicyProvidedConfigAndReleases(): void
     {
-        $clock = new FakePsrClock(10_000);
+        $clock = new FakePsrClock(10000);
 
         $stateStore = new class implements CircuitStateStoreInterface {
             public function getState(CircuitKey $key): CircuitState { return new CircuitState(CircuitStateMode::HALF_OPEN, null, 0, ['version' => 0]); }
@@ -82,7 +82,7 @@ final class CircuitBreakerProbeGatingTest extends TestCase
 
     public function testProbeGateBlocksExecutionWhenAcquireFails(): void
     {
-        $clock = new FakePsrClock(10_000);
+        $clock = new FakePsrClock(10000);
 
         $stateStore = new class implements CircuitStateStoreInterface {
             public function getState(CircuitKey $key): CircuitState { return new CircuitState(CircuitStateMode::HALF_OPEN, null, 0, ['version' => 0]); }
@@ -128,7 +128,7 @@ final class CircuitBreakerProbeGatingTest extends TestCase
 
     public function testProbeGateIsReleasedEvenWhenOperationThrows(): void
     {
-        $clock = new FakePsrClock(10_000);
+        $clock = new FakePsrClock(10000);
 
         $stateStore = new class implements CircuitStateStoreInterface {
             public function getState(CircuitKey $key): CircuitState { return new CircuitState(CircuitStateMode::HALF_OPEN, null, 0, ['version' => 0]); }
@@ -175,7 +175,7 @@ final class CircuitBreakerProbeGatingTest extends TestCase
 
     public function testProbeGateIsReleasedEvenIfClassifierThrows(): void
     {
-        $clock = new FakePsrClock(10_000);
+        $clock = new FakePsrClock(10000);
 
         $stateStore = new class implements CircuitStateStoreInterface {
             public function getState(CircuitKey $key): CircuitState { return new CircuitState(CircuitStateMode::HALF_OPEN, null, 0, ['version' => 0]); }
@@ -229,7 +229,7 @@ final class CircuitBreakerProbeGatingTest extends TestCase
 
     public function testProbeGateIsReleasedEvenIfPolicyOnOutcomeThrows(): void
     {
-        $clock = new FakePsrClock(10_000);
+        $clock = new FakePsrClock(10000);
 
         $stateStore = new class implements CircuitStateStoreInterface {
             public function getState(CircuitKey $key): CircuitState { return new CircuitState(CircuitStateMode::HALF_OPEN, null, 0, ['version' => 0]); }
@@ -302,7 +302,7 @@ final class CircuitBreakerProbeGatingTest extends TestCase
 
     public function testProbeGateIsReleasedEvenIfApplyPlanThrows(): void
     {
-        $clock = new FakePsrClock(10_000);
+        $clock = new FakePsrClock(10000);
 
         $stateStore = new class implements CircuitStateStoreInterface {
             public function getState(CircuitKey $key): CircuitState { return new CircuitState(CircuitStateMode::HALF_OPEN, null, 0, ['version' => 0]); }

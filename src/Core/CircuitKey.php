@@ -16,4 +16,19 @@ final class CircuitKey
         $this->name = $name;
         $this->dimensions = $dimensions;
     }
+
+    /**
+     * Stable identifier suitable for use as a storage key.
+     */
+    public function id(): string
+    {
+        if ($this->dimensions === []) {
+            return $this->name;
+        }
+
+        $dims = $this->dimensions;
+        ksort($dims);
+
+        return $this->name . '|' . json_encode($dims);
+    }
 }

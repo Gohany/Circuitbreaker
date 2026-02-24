@@ -16,16 +16,16 @@ final class RedisCircuitHistoryStoreTest extends TestCase
     public function testRecordUpdatesCountersBucketsAndConsecutiveFailures(): void
     {
         $redis = new FakeRedisClient();
-        $redis->setNowMs(60_000);
+        $redis->setNowMs(60000);
 
         $kb = new RedisKeyBuilder('cb', true);
         $store = new RedisCircuitHistoryStore($redis, $kb, 900, 0);
 
         $key = new CircuitKey('svc', ['tenant' => 1]);
 
-        $store->record($key, new HistoryRecord(60_000, false, ['timeout', 'http_5xx'], 123, []));
-        $store->record($key, new HistoryRecord(61_000, false, ['timeout'], 50, []));
-        $store->record($key, new HistoryRecord(62_000, true, [], 20, []));
+        $store->record($key, new HistoryRecord(60000, false, ['timeout', 'http_5xx'], 123, []));
+        $store->record($key, new HistoryRecord(61000, false, ['timeout'], 50, []));
+        $store->record($key, new HistoryRecord(62000, true, [], 20, []));
 
         $hist = $store->getHistory($key);
 

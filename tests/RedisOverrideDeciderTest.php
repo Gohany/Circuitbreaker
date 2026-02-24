@@ -18,9 +18,9 @@ final class RedisOverrideDeciderTest extends TestCase
     public function testForceDenyBeatsForceAllow(): void
     {
         $redis = new FakeRedisClient();
-        $redis->setNowMs(10_000);
+        $redis->setNowMs(10000);
 
-        $clock = new FakePsrClock(10_000);
+        $clock = new FakePsrClock(10000);
 
         $kb = new RedisKeyBuilder('cb', true);
         $store = new RedisOverrideStore($redis, $kb);
@@ -45,9 +45,9 @@ final class RedisOverrideDeciderTest extends TestCase
     public function testForcedOpenDeniesUntilExpiry(): void
     {
         $redis = new FakeRedisClient();
-        $redis->setNowMs(10_000);
+        $redis->setNowMs(10000);
 
-        $clock = new FakePsrClock(10_000);
+        $clock = new FakePsrClock(10000);
 
         $kb = new RedisKeyBuilder('cb', true);
         $store = new RedisOverrideStore($redis, $kb);
@@ -67,8 +67,8 @@ final class RedisOverrideDeciderTest extends TestCase
         $this->assertNotNull($od1);
         $this->assertFalse($od1->allowed);
 
-        $redis->setNowMs(12_000);
-        $clock->setNowMs(12_000);
+        $redis->setNowMs(12000);
+        $clock->setNowMs(12000);
 
         $od2 = $decider->decide($key, new CircuitContext(null, [], []));
         $this->assertNull($od2);

@@ -21,59 +21,66 @@ final class PdoProbeGate implements ProbeGateInterface
 
     public function acquire(CircuitKey $key, ProbeGateConfig $config, int $nowMs): ProbeGateResult
     {
-        // We use a simple table-based lock with an expiration.
-        // If the row doesn't exist, we try to insert it.
-        // If it exists, we check if it's expired.
-        
-        $stmt = $this->pdo->prepare("SELECT * FROM {$this->tableName} WHERE circuit_key = :key");
-        $stmt->execute(['key' => $key->id()]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        // Table-based in-flight counter.
+        // Schema expectation: (circuit_key PRIMARY KEY, in_flight INT NOT NULL)
 
-        if (!$row) {
-            $expiresAt = $nowMs + $config->timeoutMs;
-            $stmt = $this->pdo->prepare("
-                INSERT INTO {$this->tableName} (circuit_key, expires_at_ms)
-                VALUES (:key, :expires)
-            ");
-            try {
-                if ($stmt->execute(['key' => $key->id(), 'expires' => $expiresAt])) {
-                    return ProbeGateResult::granted();
-                }
-            } catch (\PDOException $e) {
-                if ($e->getCode() == '23000') {
-                    // Someone else just acquired it
-                    return ProbeGateResult::denied();
-                }
+        $max = max(1, (int) $config->maxInFlight);
+
+        // Attempt insert (fast-path for first acquire).
+        $stmt = $this->pdo->prepare("INSERT INTO {$this->tableName} (circuit_key, in_flight) VALUES (:key, 1)");
+        try {
+            if ($stmt->execute(['key' => $key->id()])) {
+                return new ProbeGateResult(true, 'half_open', 1, 0);
+            }
+        } catch (\PDOException $e) {
+            if ($e->getCode() != '23000') {
                 throw $e;
             }
+            // Duplicate key -> fall through to CAS-style increment.
         }
 
-        $currentExpiresAt = (int) $row['expires_at_ms'];
-        if ($nowMs > $currentExpiresAt) {
-            // Expired, try to re-acquire (atomic update)
-            $newExpiresAt = $nowMs + $config->timeoutMs;
-            $stmt = $this->pdo->prepare("
-                UPDATE {$this->tableName}
-                SET expires_at_ms = :new_expires
-                WHERE circuit_key = :key AND expires_at_ms = :old_expires
-            ");
-            $stmt->execute([
-                'new_expires' => $newExpiresAt,
-                'key' => $key->id(),
-                'old_expires' => $currentExpiresAt
-            ]);
+        // CAS-style increment only when below max.
+        $stmt = $this->pdo->prepare("
+            UPDATE {$this->tableName}
+            SET in_flight = in_flight + 1
+            WHERE circuit_key = :key AND in_flight < :max
+        ");
+        $stmt->execute([
+            'key' => $key->id(),
+            'max' => $max,
+        ]);
 
-            if ($stmt->rowCount() > 0) {
-                return ProbeGateResult::granted();
-            }
+        if ($stmt->rowCount() > 0) {
+            $cur = (int) $this->pdo
+                ->query("SELECT in_flight FROM {$this->tableName} WHERE circuit_key = " . $this->pdo->quote($key->id()))
+                ->fetchColumn();
+            return new ProbeGateResult(true, 'half_open', $cur, 0);
         }
 
-        return ProbeGateResult::denied();
+        // Denied.
+        $cur = 0;
+        try {
+            $cur = (int) $this->pdo
+                ->query("SELECT in_flight FROM {$this->tableName} WHERE circuit_key = " . $this->pdo->quote($key->id()))
+                ->fetchColumn();
+        } catch (\Throwable $e) {
+            // best-effort; keep cur=0
+        }
+        return new ProbeGateResult(false, 'half_open', $cur, 250);
     }
 
     public function release(CircuitKey $key): void
     {
-        $stmt = $this->pdo->prepare("DELETE FROM {$this->tableName} WHERE circuit_key = :key");
+        // Best-effort decrement.
+        $stmt = $this->pdo->prepare("
+            UPDATE {$this->tableName}
+            SET in_flight = CASE WHEN in_flight > 0 THEN in_flight - 1 ELSE 0 END
+            WHERE circuit_key = :key
+        ");
+        $stmt->execute(['key' => $key->id()]);
+
+        // If it reached 0, delete the row to keep table small.
+        $stmt = $this->pdo->prepare("DELETE FROM {$this->tableName} WHERE circuit_key = :key AND in_flight <= 0");
         $stmt->execute(['key' => $key->id()]);
     }
 }

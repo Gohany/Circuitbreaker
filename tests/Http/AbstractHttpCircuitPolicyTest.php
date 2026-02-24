@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace tests\Policy\Http;
+namespace tests\Http;
 
 use Gohany\Circuitbreaker\Consts\CircuitStateMode;
 use Gohany\Circuitbreaker\Core\CircuitContext;

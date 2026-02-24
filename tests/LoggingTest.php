@@ -27,7 +27,7 @@ final class LoggingTest extends TestCase
     public function testLogsEmergencyWhenCircuitOpens(): void
     {
         $logger = new TestLogger();
-        $clock = new FakePsrClock(10_000);
+        $clock = new FakePsrClock(10000);
         
         $stateStore = $this->createMock(\Gohany\Circuitbreaker\Store\CircuitStateStoreInterface::class);
         $stateStore->method('getState')->willReturn(new CircuitState(CircuitStateMode::CLOSED, null, 0, []));
@@ -35,7 +35,7 @@ final class LoggingTest extends TestCase
         $historyStore->method('getHistory')->willReturn(new CircuitHistory([], []));
 
         // Policy that triggers an OPEN transition
-        $newState = new CircuitState(CircuitStateMode::OPEN, 20_000, 0, []);
+        $newState = new CircuitState(CircuitStateMode::OPEN, 20000, 0, []);
         $plan = new TransitionPlan($newState, null, [], ['reason' => 'test_failure']);
         $policy = new ProbePolicyStub(
             new PolicyDecision(true, 'ok'),
@@ -72,7 +72,7 @@ final class LoggingTest extends TestCase
     {
         $logger = new TestLogger();
         $stateStore = $this->createMock(\Gohany\Circuitbreaker\Store\CircuitStateStoreInterface::class);
-        $stateStore->method('getState')->willReturn(new CircuitState(CircuitStateMode::OPEN, 20_000, 0, []));
+        $stateStore->method('getState')->willReturn(new CircuitState(CircuitStateMode::OPEN, 20000, 0, []));
         $historyStore = $this->createMock(\Gohany\Circuitbreaker\Store\CircuitHistoryStoreInterface::class);
         $historyStore->method('getHistory')->willReturn(new \Gohany\Circuitbreaker\Store\CircuitHistory([], []));
 

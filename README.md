@@ -1,14 +1,20 @@
-# Gohany CircuitBreaker
+![CI](https://github.com/Gohany/circuitbreaker/actions/workflows/ci.yml/badge.svg)
+[![codecov](https://codecov.io/gh/Gohany/circuitbreaker/branch/main/graph/badge.svg)](https://codecov.io/gh/Gohany/circuitbreaker)
+# Gohany Circuitbreaker
 
-A practical, general-purpose **circuit breaker** library for PHP. 
+This project is a practical, general-purpose **circuit breaker** library for PHP (`>=7.4`).
 
-At its core, this library is about **granting or blocking an action** based on its historical success and current state. While it ships with powerful **HTTP defaults** (as it's a very common use case), it is designed to protect any risky operation—be it database queries, filesystem access, heavy computations, or third-party service calls.
+But a circuit breaker is only the first chapter.
 
-This README focuses on:
-- How to use the circuit breaker **directly** for any operation
-- How to integrate it with **HTTP clients** (a common specialization)
-- How to customize **policies** (for HTTP, Fraud, etc.)
-- How to pair circuit breaking with **sane retries**
+Over time, production systems grow a whole *resilience vocabulary*: circuit breaking, careful probing, retries, concurrency limits, fairness between callers, operational overrides, and observability. This repository implements that vocabulary as small, composable primitives.
+
+If you only remember one sentence, remember this:
+
+> **You are not “calling a dependency”. You are negotiating with it.**
+
+The negotiation is driven by history (what happened recently), by current state (open/half-open/closed), by per-request context (tenant, endpoint, risk), and sometimes by operational reality (incident response overrides).
+
+This README is intentionally long-form. It starts with the *concepts*, then gives an explicit *feature catalog*, and then expands into realistic usage examples.
 
 ---
 
@@ -16,24 +22,36 @@ This README focuses on:
 
 - [Why circuit breakers](#why-circuit-breakers)
 - [Core concepts](#core-concepts)
+- [Concepts (extended guide)](#concepts-extended-guide)
+  - [Keys, dimensions, and context](#keys-dimensions-and-context)
+  - [Policies, outcomes, and signals](#policies-outcomes-and-signals)
+  - [State stores and history stores](#state-stores-and-history-stores)
+  - [Probe gating (half-open concurrency)](#probe-gating-half-open-concurrency)
+  - [Operational overrides](#operational-overrides)
+  - [Retries (circuit-aware)](#retries-circuit-aware)
+  - [Bulkheads (concurrency limits)](#bulkheads-concurrency-limits)
+  - [Resilience pipeline](#resilience-pipeline)
+  - [Observability](#observability)
+  - [Sanity tooling](#sanity-tooling)
+- [Feature catalog](#feature-catalog)
 - [Installation](#installation)
 - [Quickstart](#quickstart)
 - [HTTP usage](#http-usage)
-    - [Alternative: wrap a single call](#alternative-wrap-a-single-call)
-    - [Choosing a circuit key](#choosing-a-circuit-key)
+  - [Alternative: wrap a single call](#alternative-wrap-a-single-call)
+  - [Choosing a circuit key](#choosing-a-circuit-key)
 - [Default implementations & Examples](#default-implementations--examples)
 - [Default HTTP policy](#default-http-policy)
 - [Customizing default policies](#customizing-default-policies)
-    - [Config subclasses (recommended)](#config-subclasses-recommended)
-    - [Policy subclasses](#policy-subclasses)
-    - [Fraud stays separate](#fraud-stays-separate)
+  - [Config subclasses (recommended)](#config-subclasses-recommended)
+  - [Policy subclasses](#policy-subclasses)
+  - [Fraud stays separate](#fraud-stays-separate)
 - [Retry + Circuit Breaker](#retry--circuit-breaker)
-    - [Circuit-aware retries (deep integration)](#circuit-aware-retries-deep-integration)
-    - [Unified retryAfterMs calculation](#unified-retryafterms-calculation)
-    - [Why composition order matters](#why-composition-order-matters)
-    - [Sane retry defaults](#sane-retry-defaults)
-    - [Idempotent vs non-idempotent retries](#idempotent-vs-non-idempotent-retries)
-    - [Baking in retry policies](#baking-in-retry-policies)
+  - [Circuit-aware retries (deep integration)](#circuit-aware-retries-deep-integration)
+  - [Unified retryAfterMs calculation](#unified-retryafterms-calculation)
+  - [Why composition order matters](#why-composition-order-matters)
+  - [Sane retry defaults](#sane-retry-defaults)
+  - [Idempotent vs non-idempotent retries](#idempotent-vs-non-idempotent-retries)
+  - [Baking in retry policies](#baking-in-retry-policies)
 - [Picking good numbers](#picking-good-numbers)
 - [Testing recommendations](#testing-recommendations)
 - [Exceptions](#exceptions)
@@ -83,6 +101,200 @@ A key knob you’ll see in this project:
   In `half_open`, how many failures you tolerate before flipping back to `open`.
 
 This prevents “flapping” (a dependency that briefly looks healthy but collapses again).
+
+---
+
+## Concepts (extended guide)
+
+This section is the “novel” part: a guided walk through the moving parts, and *why* you might use each.
+
+### Keys, dimensions, and context
+
+The unit of protection is a `CircuitKey`.
+
+- `CircuitKey::$name` is a stable circuit name like `"payments_http"` or `"database:write"`.
+- `CircuitKey::$dimensions` let you slice the same circuit into many independent partitions (per tenant, provider, region, endpoint section, etc.).
+
+The per-call “who/what/why” is a `CircuitContext`.
+
+`CircuitKey` is *where state lives*. `CircuitContext` is *what you know about this request right now*.
+
+In storage-backed implementations, a circuit key needs a stable identifier. This project provides `CircuitKey::id()` for that purpose.
+
+### Policies, outcomes, and signals
+
+`CircuitPolicyInterface` answers two questions:
+
+1) **Should I allow this call right now?** (`decide(...)` → `PolicyDecision`)
+2) **What should happen after we observe the outcome?** (`onOutcome(...)` → `TransitionPlan`)
+
+The project’s policies operate on two kinds of inputs:
+
+- A `CircuitSnapshot` (current state + recent history window)
+- A `CircuitOutcome` (what happened: success/failure, optional signals, optional exception, duration)
+
+Signals are how you convert messy reality into a vocabulary your policy understands.
+For example: `timeout`, `http_5xx`, `fraud_suspected`, `rate_limited`.
+
+The conversion is done by `OutcomeClassifierInterface`.
+
+### State stores and history stores
+
+There are two storage responsibilities:
+
+- `CircuitStateStoreInterface` stores the current circuit state (`closed`, `open`, `half_open`) and metadata.
+- `CircuitHistoryStoreInterface` records outcomes over time (counters and/or a time window).
+
+This repo includes multiple storage backends under `src/Store/*`:
+
+- In-memory stores for tests/local usage
+- Redis stores for distributed systems
+- PDO stores for SQL-backed persistence
+- APCu stores for shared-memory on a single host
+
+### Probe gating (half-open concurrency)
+
+When a circuit transitions to `half_open`, you typically want to probe carefully:
+
+- allow *some* requests through
+- but not so many that a still-broken dependency is hammered
+
+That is what the `ProbeGateInterface` does.
+
+The core breaker (`Core\CircuitBreaker`) can acquire a probe gate permit when a decision indicates `requiresProbeGate`.
+Implementations exist for in-memory, Redis, and PDO.
+
+### Operational overrides
+
+Production systems need a manual “steering wheel” during incidents.
+
+Overrides let you force behaviour *without redeploying code*:
+
+- force allow (temporary)
+- force deny / force open (temporary)
+- attach a reason and metadata
+
+Overrides are implemented via `OverrideDeciderInterface` and the Redis implementation lives under `src/Override/Redis/*`.
+
+### Retries (circuit-aware)
+
+Retries without a circuit breaker can amplify an outage.
+Retries without context can also hide persistent failures.
+
+This project integrates with `gohany/rtry` under `src/Integration/Rtry/*` so retries can be:
+
+- based on the same outcome classifier and signals
+- stopped early when the circuit is clearly unhealthy
+- reported back into circuit history
+
+### Bulkheads (concurrency limits)
+
+A circuit breaker decides *whether* you may call. A bulkhead decides *how many callers may call concurrently*.
+
+This repo includes bulkheads under `src/Bulkhead/*`:
+
+- `SemaphoreBulkhead` for local concurrency limiting
+- `RedisPoolBulkhead` for distributed max-concurrency pools
+- `RedisFairQueueBulkhead` for a distributed wait-queue with fairness and lane caps
+
+The “fair queue” bulkhead is designed for shared resources like databases:
+
+- a global cap across nodes
+- per-lane caps (fixed/percent/weighted)
+- queue scanning to avoid head-of-line blocking
+- short-lived grants to avoid leaked capacity
+
+### Resilience pipeline
+
+When you start composing these primitives, you eventually want a single “do the safe thing” entry point.
+
+`ResiliencePipeline` is a minimal middleware chain (see `src/Resilience/*`) that can wrap an operation with:
+
+- circuit breaker middleware (`CircuitBreakerMiddleware`)
+- retry middleware (`RtryRetryMiddleware`)
+- bulkhead middleware (`BulkheadMiddleware`)
+
+The pipeline is intentionally small: you can add/remove pieces without rewriting your business code.
+
+### Observability
+
+There are two observability styles in the repo:
+
+- PSR-3 logging support inside the core circuit breaker (`Psr\Log\LoggerInterface`)
+- a lightweight `EmitterInterface` for structured event emission (used by some middleware/bulkheads)
+
+### Sanity tooling
+
+There are scripts intended for *humans* and CI to validate wiring:
+
+- `tools/circuit_sanity_check.php` (end-to-end sanity runner for HTTP-style policies)
+- `bin/cb-sanity-fair-queue.sh` and `bin/cb-sanity-fair-queue-extended.sh` (Redis fair-queue bulkhead checks)
+
+They are not required for runtime usage, but they are useful when you first integrate the library.
+
+---
+
+## Feature catalog
+
+This is the explicit list of “what this project now does”, grouped by concept.
+
+### Circuit breaker (core)
+
+- Circuit states: `closed`, `open`, `half_open` (`Consts\CircuitStateMode`)
+- Decisions (`Core\CircuitDecision`) and exceptions (`Exception\CircuitDeniedException`)
+- Pluggable decision logic via `Policy\CircuitPolicyInterface`
+- Pluggable classification via `Policy\OutcomeClassifierInterface`
+- Records outcomes after execution and applies state transition plans (`Policy\TransitionPlan`)
+
+### HTTP defaults (PSR-18)
+
+- Single-circuit PSR-18 decorator: `Defaults\Http\CircuitBreakingPsr18Client`
+- Multi-circuit PSR-18 decorator (multiple circuits per request): `Defaults\Http\MultiCircuitBreakingPsr18Client`
+- Key-building strategies:
+  - `Defaults\Http\DefaultHttpCircuitBuilder`
+  - `Defaults\Http\PathSectionHttpCircuitBuilder`
+  - `Defaults\Http\CircuitBreakerKeyFactory` and “pieces” (`Defaults\Http\Pieces\*`)
+
+### Bulkheads
+
+- Local concurrency limit: `Bulkhead\SemaphoreBulkhead`
+- Redis distributed pool cap: `Bulkhead\RedisPoolBulkhead`
+- Redis distributed fair queue with lane policies: `Bulkhead\RedisFairQueueBulkhead`, `Bulkhead\PoolPolicy`, `Bulkhead\LanePolicy`
+
+### Stores
+
+- In-memory stores for local usage/tests (`Store\InMemory*`)
+- Redis stores (`Store\Redis\*`) with `RedisKeyBuilder`
+- PDO stores (`Store\Pdo\*`) for SQL persistence
+- APCu store (`Store\Apcu\*`) for shared memory
+
+### Probe gating
+
+- Probe gate interface (`Store\ProbeGateInterface`) + result/config types
+- Implementations for in-memory, Redis, and PDO
+
+### Operational override & administration (Redis)
+
+- Override store + decider (`Override\Redis\RedisOverrideStore`, `Override\Redis\RedisOverrideDecider`)
+- Admin operations like forgiving/resetting history (`Override\Redis\RedisCircuitAdmin`)
+
+### Retry integration
+
+- Circuit-aware retry execution via `Integration\Rtry\RtryRetryExecutor`
+- Retry spec support via `Integration\Rtry\RetrySpec` and `RetrySpecProviderInterface`
+- Sane defaults via `Defaults\Rtry\SaneRetryPolicies`
+
+### Resilience pipeline
+
+- `Resilience\ResiliencePipeline` and middlewares:
+  - `Resilience\CircuitBreakerMiddleware`
+  - `Resilience\RtryRetryMiddleware`
+  - `Resilience\BulkheadMiddleware`
+
+### Observability
+
+- PSR-3 logging hooks in `Core\CircuitBreaker`
+- `Observability\EmitterInterface` and `Observability\NullEmitter`
 
 ---
 

@@ -34,7 +34,7 @@ final class RtryIntegrationTest extends TestCase
 {
     public function testRtryRetryExecutorCapturesAttemptsAndSignalsWeakerSuccess(): void
     {
-        $clock = new FakePsrClock(10_000);
+        $clock = new FakePsrClock(10000);
         $stateStore = $this->createMock(CircuitStateStoreInterface::class);
         $stateStore->method('getState')->willReturn(new CircuitState(CircuitStateMode::CLOSED, null, 0, []));
         
@@ -91,7 +91,7 @@ final class RtryIntegrationTest extends TestCase
 
     public function testRetrySpecProviderIntegration(): void
     {
-        $clock = new FakePsrClock(10_000);
+        $clock = new FakePsrClock(10000);
         $stateStore = $this->createMock(CircuitStateStoreInterface::class);
         $stateStore->method('getState')->willReturn(new CircuitState(CircuitStateMode::CLOSED, null, 0, []));
         $historyStore = $this->createMock(CircuitHistoryStoreInterface::class);
@@ -137,7 +137,7 @@ final class RtryIntegrationTest extends TestCase
 
     public function testRetriesAbortIfCircuitIsDeniedMidRetry(): void
     {
-        $clock = new FakePsrClock(10_000);
+        $clock = new FakePsrClock(10000);
         $stateStore = $this->createMock(CircuitStateStoreInterface::class);
         $stateStore->method('getState')->willReturn(new CircuitState(CircuitStateMode::CLOSED, null, 0, []));
         $historyStore = $this->createMock(CircuitHistoryStoreInterface::class);
@@ -202,7 +202,7 @@ final class RtryIntegrationTest extends TestCase
 
     public function testExistingRtryDeciderIsRespected(): void
     {
-        $clock = new FakePsrClock(10_000);
+        $clock = new FakePsrClock(10000);
         $stateStore = $this->createMock(CircuitStateStoreInterface::class);
         $stateStore->method('getState')->willReturn(new CircuitState(CircuitStateMode::CLOSED, null, 0, []));
         $historyStore = $this->createMock(CircuitHistoryStoreInterface::class);

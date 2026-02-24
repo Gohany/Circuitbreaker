@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  phpunit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.1', '8.2', '8.3']
+        coverage: [false]
+        include:
+          - php: '8.3'
+            coverage: true
+
+    env:
+      # Secrets are not available in GitHub Actions expression contexts like `if:`.
+      # Expose it via env so we can safely gate the Codecov step without failing fork PRs.
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Codecov uploader needs git history/metadata to properly associate uploads.
+          fetch-depth: 0
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: composer:v2
+          coverage: ${{ matrix.coverage && 'pcov' || 'none' }}
+          extensions: redis, pdo
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+
+      - name: Run tests (no coverage)
+        if: ${{ !matrix.coverage }}
+        run: composer test:unit
+
+      - name: Run tests (with coverage)
+        if: ${{ matrix.coverage }}
+        run: |
+          mkdir -p build/logs
+          composer test:coverage
+
+      - name: Upload coverage to Codecov
+        # On fork PRs, secrets are not available; skip upload rather than failing the whole CI.
+        if: ${{ matrix.coverage && env.CODECOV_TOKEN != '' }}
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ env.CODECOV_TOKEN }}
+          files: build/logs/clover.xml
+          fail_ci_if_error: true
+
+  phpunit-integration:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: composer:v2
+          coverage: none
+          extensions: redis, pdo
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+
+      - name: Install redis-cli (redis-tools)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y redis-tools
+
+      - name: Wait for Redis
+        run: |
+          for i in $(seq 1 30); do
+            redis-cli -h 127.0.0.1 -p 6379 ping && exit 0
+            sleep 1
+          done
+          echo "Redis did not become ready in time" >&2
+          exit 1
+
+      - name: Run integration tests
+        run: composer test:integration

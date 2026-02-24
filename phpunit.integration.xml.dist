@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+        bootstrap="vendor/autoload.php"
+        colors="true"
+        failOnWarning="true"
+        failOnRisky="true"
+>
+    <php>
+        <!-- Use a dedicated db (15) to avoid collisions with local dev. -->
+        <env name="GOHANY_CB_TEST_REDIS_DSN" value="redis://127.0.0.1:6379/15"/>
+        <env name="GOHANY_CB_TEST_REDIS_PREFIX" value="it"/>
+    </php>
+
+    <testsuites>
+        <testsuite name="Integration">
+            <directory suffix="Test.php">tests/Integration</directory>
+        </testsuite>
+    </testsuites>
+
+    <groups>
+        <include>
+            <group>integration</group>
+        </include>
+    </groups>
+</phpunit>

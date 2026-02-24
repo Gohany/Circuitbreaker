@@ -41,16 +41,18 @@ class PdoStoreTest extends TestCase
             CREATE TABLE circuit_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 circuit_key VARCHAR(255) NOT NULL,
-                outcome VARCHAR(64) NOT NULL,
-                recorded_at_ms BIGINT NOT NULL,
-                details_json TEXT
+                ts_ms BIGINT NOT NULL,
+                success INT NOT NULL,
+                signals_json TEXT,
+                duration_ms INT NOT NULL DEFAULT 0,
+                attributes_json TEXT
             )
         ");
 
         $this->pdo->exec("
             CREATE TABLE circuit_probe_gates (
                 circuit_key VARCHAR(255) PRIMARY KEY,
-                expires_at_ms BIGINT NOT NULL
+                in_flight INT NOT NULL
             )
         ");
     }
@@ -85,35 +87,36 @@ class PdoStoreTest extends TestCase
         $store = new PdoCircuitHistoryStore($this->pdo);
         $key = new CircuitKey('test');
 
-        $store->record($key, new HistoryRecord('success', 1000, ['d' => 1]));
-        $store->record($key, new HistoryRecord('failure', 2000, ['d' => 2]));
+        $store->record($key, new HistoryRecord(1000, true, [], 0, ['d' => 1]));
+        $store->record($key, new HistoryRecord(2000, false, ['timeout'], 0, ['d' => 2]));
 
         $history = $store->getHistory($key);
-        $records = $history->records;
+        $window = $history->window;
 
-        $this->assertCount(2, $records);
-        $this->assertEquals('success', $records[0]->outcome);
-        $this->assertEquals('failure', $records[1]->outcome);
+        $this->assertCount(2, $window);
+        $this->assertSame(1000, $window[0]->tsMs);
+        $this->assertTrue($window[0]->success);
+        $this->assertSame(['d' => 1], $window[0]->attributes);
+
+        $this->assertSame(2000, $window[1]->tsMs);
+        $this->assertFalse($window[1]->success);
+        $this->assertSame(['timeout'], $window[1]->signals);
     }
 
     public function testProbeGate(): void
     {
         $gate = new PdoProbeGate($this->pdo);
         $key = new CircuitKey('test');
-        $config = new ProbeGateConfig(1000);
+        $config = new ProbeGateConfig(1, true);
 
         $res1 = $gate->acquire($key, $config, 5000);
-        $this->assertTrue($res1->allowed);
+        $this->assertTrue($res1->acquired);
 
         $res2 = $gate->acquire($key, $config, 5100);
-        $this->assertFalse($res2->allowed);
-
-        // Test expired
-        $res3 = $gate->acquire($key, $config, 6100);
-        $this->assertTrue($res3->allowed);
+        $this->assertFalse($res2->acquired);
 
         $gate->release($key);
-        $res4 = $gate->acquire($key, $config, 6200);
-        $this->assertTrue($res4->allowed);
+        $res3 = $gate->acquire($key, $config, 6100);
+        $this->assertTrue($res3->acquired);
     }
 }
