@@ -27,5 +27,9 @@
     }
   },
   "minimum-stability": "stable",
-  "prefer-stable": true
+  "prefer-stable": true,
+  "scripts": {
+    "test": "phpunit -c phpunit.xml",
+    "test:coverage": "phpunit -c phpunit.xml --coverage-clover build/logs/clover.xml"
+  }
 }
