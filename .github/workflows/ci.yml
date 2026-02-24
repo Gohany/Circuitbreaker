@@ -82,6 +82,11 @@ jobs:
       - name: Install dependencies
         uses: ramsey/composer-install@v3
 
+      - name: Install redis-cli (redis-tools)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y redis-tools
+
       - name: Wait for Redis
         run: |
           for i in $(seq 1 30); do
