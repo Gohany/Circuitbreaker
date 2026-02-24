@@ -1,8 +1,29 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<phpunit bootstrap="tests/bootstrap.php" colors="true" verbose="true" failOnWarning="true" failOnRisky="true">
+<phpunit
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+        bootstrap="tests/bootstrap.php"
+        colors="true"
+        failOnRisky="true"
+        failOnWarning="true"
+>
   <testsuites>
-    <testsuite name="CircuitBreaker">
-      <directory>tests</directory>
+    <testsuite name="unit">
+      <directory suffix="Test.php">tests</directory>
+      <!-- Integration tests are run via phpunit.integration.xml.dist -->
+      <exclude>tests/Integration</exclude>
     </testsuite>
   </testsuites>
+
+  <groups>
+    <exclude>
+      <group>integration</group>
+    </exclude>
+  </groups>
+
+  <coverage processUncoveredFiles="true">
+    <include>
+      <directory suffix=".php">src</directory>
+    </include>
+  </coverage>
 </phpunit>

@@ -31,13 +31,14 @@ jobs:
           php-version: ${{ matrix.php }}
           tools: composer:v2
           coverage: ${{ matrix.coverage && 'pcov' || 'none' }}
+          extensions: redis, pdo
 
       - name: Install dependencies
         uses: ramsey/composer-install@v3
 
       - name: Run tests (no coverage)
         if: ${{ !matrix.coverage }}
-        run: composer test
+        run: composer test:unit
 
       - name: Run tests (with coverage)
         if: ${{ matrix.coverage }}
@@ -52,3 +53,43 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: build/logs/clover.xml
           fail_ci_if_error: true
+
+  phpunit-integration:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: composer:v2
+          coverage: none
+          extensions: redis, pdo
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+
+      - name: Wait for Redis
+        run: |
+          for i in $(seq 1 30); do
+            redis-cli -h 127.0.0.1 -p 6379 ping && exit 0
+            sleep 1
+          done
+          echo "Redis did not become ready in time" >&2
+          exit 1
+
+      - name: Run integration tests
+        run: composer test:integration
