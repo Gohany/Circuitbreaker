@@ -12,6 +12,13 @@ final class ApcuCircuitStateStore implements CircuitStateStoreInterface
     private string $prefix;
     private int $ttlSeconds;
 
+    private function assertApcuAvailable(): void
+    {
+        if (!function_exists('apcu_fetch') || !function_exists('apcu_add') || !function_exists('apcu_entry')) {
+            throw new \RuntimeException('APCu is not available: please install/enable ext-apcu.');
+        }
+    }
+
     public function __construct(string $prefix = 'cb:state:', int $ttlSeconds = 604800)
     {
         $this->prefix = $prefix;
@@ -20,6 +27,7 @@ final class ApcuCircuitStateStore implements CircuitStateStoreInterface
 
     public function getState(CircuitKey $key): CircuitState
     {
+        $this->assertApcuAvailable();
         $k = $this->prefix . $key->id();
         $raw = apcu_fetch($k);
 
@@ -37,6 +45,7 @@ final class ApcuCircuitStateStore implements CircuitStateStoreInterface
 
     public function casUpdateState(CircuitKey $key, CircuitState $expected, CircuitState $new): bool
     {
+        $this->assertApcuAvailable();
         $k = $this->prefix . $key->id();
         
         $expectedVersion = isset($expected->meta['version']) ? (int) $expected->meta['version'] : 0;

@@ -11,6 +11,13 @@ final class ApcuProbeGate implements ProbeGateInterface
 {
     private string $prefix;
 
+    private function assertApcuAvailable(): void
+    {
+        if (!function_exists('apcu_fetch') || !function_exists('apcu_entry') || !function_exists('apcu_delete')) {
+            throw new \RuntimeException('APCu is not available: please install/enable ext-apcu.');
+        }
+    }
+
     public function __construct(string $prefix = 'cb:probe:')
     {
         $this->prefix = $prefix;
@@ -18,39 +25,47 @@ final class ApcuProbeGate implements ProbeGateInterface
 
     public function acquire(CircuitKey $key, ProbeGateConfig $config, int $nowMs): ProbeGateResult
     {
+        $this->assertApcuAvailable();
         $k = $this->prefix . $key->id();
-        $ttlSeconds = (int) ceil($config->timeoutMs / 1000);
-        if ($ttlSeconds < 1) $ttlSeconds = 1;
 
-        // apcu_add returns false if the key already exists
-        if (apcu_add($k, $nowMs + $config->timeoutMs, $ttlSeconds)) {
-            return ProbeGateResult::granted();
-        }
+        $max = max(1, (int) $config->maxInFlight);
+        $ttlSeconds = 3600; // best-effort safety TTL in case of leaked permits
 
-        // Check if it's expired (in case TTL didn't trigger yet or we want to be safe)
-        $expiresAt = apcu_fetch($k);
-        if ($expiresAt !== false && $nowMs > $expiresAt) {
-            // Expired, try to re-acquire (not fully atomic re-acquire but good enough for single server APCu)
-            // APCu doesn't have a good way to atomically replace if value matches without apcu_entry
-            $granted = false;
-            apcu_entry($k, function($key, $existing) use ($nowMs, $config, &$granted, $ttlSeconds) {
-                if ($existing === false || $nowMs > $existing) {
-                    $granted = true;
-                    return $nowMs + $config->timeoutMs;
-                }
-                return $existing;
-            }, $ttlSeconds);
+        $granted = false;
+        $cur = 0;
 
-            if ($granted) {
-                return ProbeGateResult::granted();
+        apcu_entry($k, function ($key, $existing) use ($max, &$granted, &$cur) {
+            $existing = is_int($existing) ? $existing : 0;
+            $cur = $existing;
+            if ($existing < $max) {
+                $granted = true;
+                $cur = $existing + 1;
+                return $existing + 1;
             }
+            return $existing;
+        }, $ttlSeconds);
+
+        if ($granted) {
+            return new ProbeGateResult(true, 'half_open', $cur, 0);
         }
 
-        return ProbeGateResult::denied();
+        return new ProbeGateResult(false, 'half_open', $cur, 250);
     }
 
     public function release(CircuitKey $key): void
     {
-        apcu_delete($this->prefix . $key->id());
+        $this->assertApcuAvailable();
+        $k = $this->prefix . $key->id();
+
+        apcu_entry($k, function ($key, $existing) {
+            $existing = is_int($existing) ? $existing : 0;
+            $next = $existing > 0 ? $existing - 1 : 0;
+            return $next;
+        }, 3600);
+
+        $cur = apcu_fetch($k);
+        if ($cur === 0) {
+            apcu_delete($k);
+        }
     }
 }
