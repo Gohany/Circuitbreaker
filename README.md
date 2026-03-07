@@ -753,6 +753,18 @@ Also test classification rules:
 - 400 does not (unless intentionally overridden)
 - timeouts/transport exceptions count as failures
 
+For non-production test environments where you want full breaker stats/state transitions but do not want requests to be hard-blocked, opt-in per call via context attribute:
+
+```php
+$context = new CircuitContext(null, [
+    'cb_bypass_deny_block' => true,
+]);
+
+$result = $breaker->execute($key, $context, $operation);
+```
+
+This keeps decisioning and outcome recording active, but bypasses the final deny throw (`CircuitDeniedException`). Keep this disabled in production.
+
 ---
 
 ### Exceptions

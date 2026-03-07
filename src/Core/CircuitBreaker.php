@@ -26,6 +26,7 @@ use Psr\Log\LoggerInterface;
 
 final class CircuitBreaker implements CircuitBreakerInterface
 {
+    private const CONTEXT_ATTR_BYPASS_DENY_BLOCK = 'cb_bypass_deny_block';
     private CircuitStateStoreInterface $stateStore;
     private CircuitHistoryStoreInterface $historyStore;
     private CircuitPolicyInterface $policy;
@@ -84,8 +85,9 @@ final class CircuitBreaker implements CircuitBreakerInterface
         $res = $this->decideWithSnapshot($key, $context);
         $decision = $res['decision'];
         $snapshotAtDecision = $res['snapshot'];
+        $bypassDenyBlock = (bool) ($context->attributes[self::CONTEXT_ATTR_BYPASS_DENY_BLOCK] ?? false);
 
-        if (!$decision->allowed) {
+        if (!$decision->allowed && !$bypassDenyBlock) {
             $this->logger !== null &&
             $this->logger->warning('Circuit denied access: {reason}', [
                 'circuit' => $key->name,
@@ -94,6 +96,16 @@ final class CircuitBreaker implements CircuitBreakerInterface
                 'retry_after_ms' => $decision->retryAfterMs,
             ]);
             throw new CircuitDeniedException($decision->reason, $decision->retryAfterMs);
+        }
+
+        if (!$decision->allowed && $bypassDenyBlock) {
+            $this->logger !== null &&
+            $this->logger->notice('Circuit deny block bypassed: {reason}', [
+                'circuit' => $key->name,
+                'dimensions' => $key->dimensions,
+                'reason' => $decision->reason,
+                'retry_after_ms' => $decision->retryAfterMs,
+            ]);
         }
 
         $nowMs = Time::toUnixMs($this->clock->now());

@@ -102,6 +102,57 @@ final class LoggingTest extends TestCase
         $this->assertTrue($logger->hasLog('warning', 'Circuit denied access: circuit_is_open'));
     }
 
+    public function testBypassesDenyBlockWhenContextAttributeEnabled(): void
+    {
+        $logger = new TestLogger();
+
+        $stateStore = $this->createMock(\Gohany\Circuitbreaker\Store\CircuitStateStoreInterface::class);
+        $stateStore->method('getState')->willReturn(new CircuitState(CircuitStateMode::OPEN, 20000, 0, []));
+
+        $historyStore = $this->createMock(\Gohany\Circuitbreaker\Store\CircuitHistoryStoreInterface::class);
+        $historyStore->method('getHistory')->willReturn(new \Gohany\Circuitbreaker\Store\CircuitHistory([], []));
+        $historyStore->expects($this->once())->method('record');
+
+        $plan = new TransitionPlan(
+            null,
+            new \Gohany\Circuitbreaker\Store\HistoryRecord(123, false, ['denied_but_observed']),
+            [],
+            []
+        );
+
+        $policy = new ProbePolicyStub(
+            new PolicyDecision(false, 'circuit_is_open', 10000),
+            new \Gohany\Circuitbreaker\Store\ProbeGateConfig(1, true),
+            $plan
+        );
+
+        $breaker = new CircuitBreaker(
+            $stateStore,
+            $historyStore,
+            $policy,
+            new ClassifierStub(true),
+            [],
+            null,
+            null,
+            null,
+            null,
+            null,
+            $logger
+        );
+
+        $result = $breaker->execute(
+            new CircuitKey('test_svc'),
+            new CircuitContext(null, ['cb_bypass_deny_block' => true]),
+            function () {
+                return 'ok';
+            }
+        );
+
+        $this->assertSame('ok', $result);
+        $this->assertTrue($logger->hasLog('notice', 'Circuit deny block bypassed: {reason}'));
+        $this->assertFalse($logger->hasLog('warning', 'Circuit denied access: circuit_is_open'));
+    }
+
     public function testLogsWarningWhenProbeGateBlocked(): void
     {
         $logger = new TestLogger();
