@@ -12,7 +12,7 @@ final class ExtRedisClient implements RedisClientInterface
         $this->redis = $redis;
     }
 
-    public function eval($script, array $keys = [], array $args = [])
+    public function eval(string $script, array $keys = [], array $args = [])
     {
         $params = array_merge($keys, $args);
         return $this->redis->eval($script, $params, count($keys));

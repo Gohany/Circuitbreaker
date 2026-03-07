@@ -32,7 +32,7 @@ final class FakeRedisClient implements RedisClientInterface
         }
     }
 
-    public function eval($script, array $keys = [], array $args = [])
+    public function eval(string $script, array $keys = [], array $args = [])
     {
         $this->expireSweep();
 

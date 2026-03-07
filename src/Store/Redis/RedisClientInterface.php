@@ -2,9 +2,11 @@
 
 namespace Gohany\Circuitbreaker\Store\Redis;
 
-interface RedisClientInterface
+use Gohany\Circuitbreaker\Contracts\RedisClientInterface as ContractsRedisClientInterface;
+
+interface RedisClientInterface extends ContractsRedisClientInterface
 {
-    public function eval($script, array $keys = [], array $args = []);
+    public function eval(string $script, array $keys = [], array $args = []);
     public function get($key);
     /**
      * @param array<string,mixed> $options
