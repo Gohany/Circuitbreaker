@@ -2,7 +2,7 @@
   "name": "gohany/circuitbreaker",
   "description": "Circuit breaker primitives for Symfony and CodeIgniter (PHP 7.4) with Redis stores and probe gating.",
   "type": "library",
-  "license": "proprietary",
+  "license": "MIT",
   "require": {
     "php": ">=7.4",
     "psr/clock": "^1.0",
